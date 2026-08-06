@@ -102,14 +102,25 @@ export async function generateCerts(p = defaultPaths) {
   return f;
 }
 
-/** True when our CA is already a trusted root for SSL in the user's keychain. */
+/**
+ * True when our CA carries an SSL trust setting in the user's keychain.
+ *
+ * `security verify-cert` is the obvious call and the wrong one: it consults the system
+ * trust store and applies the full SSL policy including Certificate Transparency, which
+ * a private CA can never satisfy. It reports "not trusted" for a CA that is, in fact,
+ * trusted — which would make setup re-prompt for a password on every launch.
+ *
+ * The authoritative source is the user's own trust settings, which is what WKWebView
+ * (and therefore Excel's task pane) actually consults.
+ */
 export async function isCaTrusted(p = defaultPaths) {
   const { caCert } = certFiles(p);
   if (!existsSync(caCert)) return false;
   try {
-    await run("security", ["verify-cert", "-c", caCert, "-p", "ssl", "-L"]);
-    return true;
+    const { stdout } = await run("security", ["dump-trust-settings"]);
+    return stdout.includes(CA_COMMON_NAME);
   } catch {
+    // Exits non-zero when the user has no trust settings at all.
     return false;
   }
 }
@@ -147,10 +158,23 @@ export async function untrustCa(p = defaultPaths) {
   }
 }
 
-/** Generate if needed, trust if needed. Returns the key/cert PEM contents. */
-export async function ensureCerts(p = defaultPaths) {
+/**
+ * Generate the certificate pair if missing and return the PEMs.
+ *
+ * Deliberately does NOT trust: the server can listen on a self-signed certificate
+ * perfectly well, and trusting triggers a macOS password dialog. Blocking app startup
+ * on a modal the user has not asked for is bad behaviour, and if they dismissed it the
+ * app would fail to start at all. Trust is an explicit step in the setup wizard.
+ */
+export async function ensureCertFiles(p = defaultPaths) {
   if (!(await certsExist(p))) await generateCerts(p);
-  if (!(await isCaTrusted(p))) await trustCa(p);
   const f = certFiles(p);
   return { key: await readFile(f.key), cert: await readFile(f.cert) };
+}
+
+/** Generate if needed, then trust. Invoked by the wizard's certificate step. */
+export async function ensureTrustedCerts(p = defaultPaths) {
+  const credentials = await ensureCertFiles(p);
+  if (!(await isCaTrusted(p))) await trustCa(p);
+  return credentials;
 }

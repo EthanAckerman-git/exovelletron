@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task pane preview</title>
+<link rel="stylesheet" href="/app/taskpane.css">
+<style>
+  body { background: #6b6b76; }
+  .stage { display: flex; gap: 24px; padding: 20px; align-items: flex-start; }
+  .pane {
+    width: 360px; height: 940px; background: var(--paper);
+    display: flex; flex-direction: column; border-radius: 8px; overflow: hidden;
+    box-shadow: 0 10px 40px rgb(0 0 0 / 35%);
+  }
+  .pane[data-theme="dark"] { color-scheme: dark; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="pane" id="light" data-theme="light">
+    <header class="status">
+      <span class="status__dot" data-state="ready"></span>
+      <span class="status__name">Qwen3.5 4B</span>
+      <span class="status__local">on-device</span>
+    </header>
+    <div class="selection">
+      <span class="selection__addr">Sales!E2:E501</span>
+      <span class="selection__meta">500 × 1</span>
+    </div>
+    <main class="thread" id="thread"></main>
+    <footer class="composer">
+      <div class="composer__box">
+        <textarea rows="1" placeholder="Ask about this sheet…"></textarea>
+        <button class="composer__send" data-mode="send">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3.5M4 7l4-3.6L12 7"/></svg>
+        </button>
+      </div>
+      <div class="composer__hint"><span>Enter to send · Shift+Enter for a new line</span></div>
+    </footer>
+  </div>
+</div>
+<script type="module" src="/app/preview.js"></script>
+</body>
+</html>

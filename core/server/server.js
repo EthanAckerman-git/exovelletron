@@ -54,10 +54,17 @@ export async function readJsonBody(req, { limit = 4_000_000 } = {}) {
  */
 export function createAppServer({ credentials, port, engine, models, appInfo = {} }) {
   const token = mintToken();
+  /**
+   * The port actually in use. It only diverges from the requested one when binding to
+   * port 0, but the CSP and the origin allowlist are both derived from it, so they must
+   * read the live value rather than the requested one.
+   */
+  let boundPort = port;
+
   /** @type {Map<string, (req, res, ctx) => Promise<boolean|void>>} */
   const routes = new Map();
 
-  const ctx = { engine, models, token, port, appInfo, json, readJsonBody };
+  const ctx = { engine, models, token, get port() { return boundPort; }, appInfo, json, readJsonBody };
 
   registerStatusRoutes(routes, ctx);
   registerChatRoutes(routes, ctx);
@@ -72,18 +79,18 @@ export function createAppServer({ credentials, port, engine, models, appInfo = {
       "Content-Length": body.length,
       // The token is embedded, so this must never be cached to disk by the webview.
       "Cache-Control": "no-store, no-cache, must-revalidate",
-      ...securityHeaders(port),
+      ...securityHeaders(boundPort),
     });
     res.end(body);
   }
 
   async function handle(req, res) {
-    const url = new URL(req.url, `https://localhost:${port}`);
+    const url = new URL(req.url, `https://localhost:${boundPort}`);
     const pathname = url.pathname;
 
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
-        "Access-Control-Allow-Origin": `https://localhost:${port}`,
+        "Access-Control-Allow-Origin": `https://localhost:${boundPort}`,
         "Access-Control-Allow-Headers": `Content-Type, ${TOKEN_HEADER}`,
         "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       }).end();
@@ -91,7 +98,7 @@ export function createAppServer({ credentials, port, engine, models, appInfo = {
     }
 
     if (pathname.startsWith("/api/")) {
-      const auth = authorizeApiRequest(req, { token, port });
+      const auth = authorizeApiRequest(req, { token, port: boundPort });
       if (!auth.ok) return json(res, auth.status, { error: auth.message });
 
       const key = `${req.method} ${pathname}`;
@@ -146,7 +153,7 @@ export function createAppServer({ credentials, port, engine, models, appInfo = {
 
   return {
     token,
-    port,
+    get port() { return boundPort; },
     server,
     /** @returns {Promise<number>} the bound port */
     listen() {
@@ -161,7 +168,8 @@ export function createAppServer({ credentials, port, engine, models, appInfo = {
         };
         const onListening = () => {
           server.removeListener("error", onError);
-          resolve(server.address().port);
+          boundPort = server.address().port;
+          resolve(boundPort);
         };
         server.once("error", onError);
         server.once("listening", onListening);

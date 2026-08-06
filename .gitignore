@@ -3,5 +3,6 @@ dist/
 release/
 assets/icon.icns
 assets/icon.png
+assets/trayTemplate*.png
 *.log
 .DS_Store

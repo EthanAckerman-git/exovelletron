@@ -141,10 +141,47 @@ export async function isManifestInstalled(port, p = defaultPaths) {
   }
 }
 
+/**
+ * Raised when macOS blocks us from Excel's container.
+ *
+ * Excel's sideload folder lives inside its sandbox container, which macOS protects
+ * under Full Disk Access. Without that grant every write fails with EPERM and there is
+ * no prompt to trigger — this is the same reason Microsoft's own add-in tooling requires
+ * developers to grant Terminal Full Disk Access. Callers use this to route the user to
+ * the right settings pane instead of showing a raw errno.
+ */
+export class AddinAccessError extends Error {
+  constructor(targetPath) {
+    super(
+      "macOS is blocking access to Excel's add-ins folder. " +
+      "Excel AI Local needs Full Disk Access to install the add-in there.",
+    );
+    this.name = "AddinAccessError";
+    this.code = "TCC_DENIED";
+    this.targetPath = targetPath;
+  }
+}
+
+const isPermissionError = (err) =>
+  err?.code === "EPERM" || err?.code === "EACCES" || err?.code === "EROFS";
+
 /** Write the manifest into Excel's sideload folder, creating it if absent. */
 export async function installManifest(port, p = defaultPaths) {
-  await mkdir(p.wefDir, { recursive: true });
   const file = manifestPath(p);
+  try {
+    await mkdir(p.wefDir, { recursive: true });
+    await writeFile(file, buildManifest(port), "utf8");
+  } catch (err) {
+    if (isPermissionError(err)) throw new AddinAccessError(p.wefDir);
+    throw err;
+  }
+  return file;
+}
+
+/** Write the manifest somewhere reachable so the user can install it by hand. */
+export async function exportManifest(port, destDir, p = defaultPaths) {
+  await mkdir(destDir, { recursive: true });
+  const file = path.join(destDir, MANIFEST_FILENAME);
   await writeFile(file, buildManifest(port), "utf8");
   return file;
 }

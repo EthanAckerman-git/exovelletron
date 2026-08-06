@@ -174,6 +174,48 @@ function renderIcon(size) {
   return out;
 }
 
+/**
+ * Menu-bar icon. macOS template images must be pure black with an alpha channel; the
+ * system recolours them for light and dark menu bars. So this is the grid motif only,
+ * with no squircle and no gradient.
+ */
+function renderTrayIcon(size) {
+  const SS = 4;
+  const S = size * SS;
+  const acc = new Float32Array(size * size);
+
+  const span = S * 0.82;
+  const left = (S - span) / 2;
+  const gap = span * 0.16;
+  const cell = (span - gap * 2) / 3;
+  const cellR = cell * 0.28;
+
+  for (let sy = 0; sy < S; sy++) {
+    for (let sx = 0; sx < S; sx++) {
+      const px = sx + 0.5;
+      const py = sy + 0.5;
+      let a = 0;
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+          const bx = left + col * (cell + gap) + cell / 2;
+          const by = left + row * (cell + gap) + cell / 2;
+          const d = sdRoundRect(px, py, bx, by, cell / 2, cell / 2, cellR);
+          const cov = Math.min(Math.max(0.5 - d, 0), 1);
+          // The lit cell reads as solid; the rest sit back a little.
+          a = Math.max(a, cov * (row === 0 && col === 2 ? 1 : 0.66));
+        }
+      }
+      if (a > 0) acc[Math.floor(sy / SS) * size + Math.floor(sx / SS)] += a / (SS * SS);
+    }
+  }
+
+  const out = new Uint8Array(size * size * 4);
+  for (let i = 0; i < acc.length; i++) {
+    out[i * 4 + 3] = Math.min(255, Math.round(acc[i] * 255));
+  }
+  return out;
+}
+
 /* ---------------------------------------------------------------------- main */
 
 const MANIFEST_SIZES = [16, 32, 64, 80, 128, 256, 512];
@@ -202,6 +244,10 @@ async function main() {
     await writeFile(path.join(webIconsDir, `icon-${size}.png`), buf);
   }
   await writeFile(path.join(assetsDir, "icon.png"), png(512));
+
+  // Tray template images, 1x and 2x.
+  await writeFile(path.join(assetsDir, "trayTemplate.png"), encodePng(renderTrayIcon(16), 16, 16));
+  await writeFile(path.join(assetsDir, "trayTemplate@2x.png"), encodePng(renderTrayIcon(32), 32, 32));
 
   // .icns for the macOS app bundle.
   const iconset = path.join(assetsDir, "icon.iconset");

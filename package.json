@@ -19,7 +19,7 @@
     "start": "electron .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dist": "npm run prepare:assets && electron-builder --mac --arm64"
+    "dist": "npm run prepare:assets && node scripts/dist.mjs"
   },
   "dependencies": {
     "node-llama-cpp": "^3.19.1"
@@ -38,11 +38,13 @@
       "output": "release",
       "buildResources": "assets"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "desktop/**/*",
       "core/**/*",
       "dist/**/*",
-      "assets/icon.png",
+      "shared/**/*",
+      "assets/**/*",
       "!**/*.test.js"
     ],
     "asarUnpack": [

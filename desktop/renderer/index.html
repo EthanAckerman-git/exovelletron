@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'">
+  <title>Excel AI Local</title>
+  <link rel="stylesheet" href="../../shared/tokens.css">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="drag-region"></div>
+
+  <main class="panel">
+    <header class="hero">
+      <img class="hero__icon" src="../../dist/assets/icon-128.png" alt="">
+      <div class="hero__text">
+        <h1>Excel AI Local</h1>
+        <p class="hero__status">
+          <span class="status__dot" id="dot" data-state="idle"></span>
+          <span id="statusText">Starting…</span>
+        </p>
+      </div>
+      <div class="hero__meta mono">
+        <span id="endpoint">—</span>
+        <span id="version"></span>
+      </div>
+    </header>
+
+    <section class="section" id="setupSection" hidden>
+      <div class="section__head">
+        <h2 class="eyebrow">Setup</h2>
+        <span class="eyebrow" id="setupCount"></span>
+      </div>
+      <ol class="steps" id="steps"></ol>
+    </section>
+
+    <section class="section" id="readySection" hidden>
+      <div class="ready">
+        <div class="ready__mark" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 10.5l3.5 3.5 7.5-8"/>
+          </svg>
+        </div>
+        <div>
+          <p class="ready__title">Everything is set up</p>
+          <p class="ready__sub">Open Excel and choose <strong>Excel AI Local</strong> on the Home tab.</p>
+        </div>
+        <button class="btn btn--primary" id="openExcel">Open Excel</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section__head">
+        <h2 class="eyebrow">Models</h2>
+        <span class="eyebrow" id="ramNote"></span>
+      </div>
+      <div class="models" id="models"></div>
+    </section>
+
+    <footer class="foot">
+      <span class="mono" id="footPath"></span>
+      <button class="linkish" id="revealModels">Show in Finder</button>
+    </footer>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
