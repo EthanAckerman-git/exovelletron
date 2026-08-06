@@ -1,0 +1,71 @@
+{
+  "name": "excel-ai-local",
+  "productName": "Excel AI Local",
+  "version": "1.0.0",
+  "description": "Fully offline AI assistant for Microsoft Excel. Your data never leaves your Mac.",
+  "type": "module",
+  "main": "desktop/main.js",
+  "author": "Excel AI Local",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "vendor:office": "node scripts/vendor-office.mjs",
+    "prepare:assets": "npm run vendor:office && npm run build:web",
+    "dev": "npm run prepare:assets && electron .",
+    "start": "electron .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist": "npm run prepare:assets && electron-builder --mac --arm64"
+  },
+  "dependencies": {
+    "node-llama-cpp": "^3.19.1"
+  },
+  "devDependencies": {
+    "@microsoft/office-js": "^1.1.110",
+    "esbuild": "^0.25.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.excelailocal.app",
+    "productName": "Excel AI Local",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "desktop/**/*",
+      "core/**/*",
+      "dist/**/*",
+      "assets/icon.png",
+      "!**/*.test.js"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-llama-cpp/**",
+      "**/node_modules/@node-llama-cpp/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [{ "target": "dmg", "arch": ["arm64"] }],
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "LSUIElement": false,
+        "NSHumanReadableCopyright": "Runs entirely on your machine."
+      }
+    },
+    "dmg": {
+      "title": "Excel AI Local",
+      "contents": [
+        { "x": 140, "y": 200, "type": "file" },
+        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+      ]
+    }
+  }
+}

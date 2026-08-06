@@ -1,0 +1,301 @@
+/**
+ * The inference engine: owns the llama.cpp model, context, and chat session.
+ *
+ * One model is resident at a time. Loading is idempotent and serialised, so several
+ * requests arriving during a slow load all wait on the same promise rather than each
+ * trying to map a 3 GB file.
+ *
+ * Tool calls are *proposals*: the handlers validate and queue an action, then hand the
+ * model a short confirmation. Nothing touches the workbook until the user approves the
+ * preview in the task pane.
+ */
+import { EventEmitter } from "node:events";
+import os from "node:os";
+import { ACTION_SPECS, validateAction } from "./actions.js";
+import { SYSTEM_PROMPT, buildUserTurn } from "./prompt.js";
+
+/** @typedef {"idle"|"loading"|"ready"|"generating"|"error"} EngineState */
+
+/**
+ * ggml probes for an optional Metal shader variant that uses the Metal 4 tensor API and
+ * logs at error level when it cannot build it. It then disables that path and runs the
+ * standard Metal kernels normally — all layers still offload to the GPU. Surfacing this
+ * to users would be a false alarm, so it is filtered out of the log stream.
+ */
+const BENIGN_BACKEND_NOISE = [
+  /ggml_metal_library_init_from_source/i,
+  /tensor API is not supported in this environment/i,
+];
+
+export const isBenignBackendNoise = (message) =>
+  typeof message === "string" && BENIGN_BACKEND_NOISE.some((re) => re.test(message));
+
+/** How many invalid tool calls to tolerate in one turn before telling the model to stop. */
+export const MAX_TOOL_REJECTIONS = 4;
+
+export class Engine extends EventEmitter {
+  #llamaModule;
+  #llama = null;
+  #model = null;
+  #context = null;
+  #session = null;
+  #modelId = null;
+  #modelPath = null;
+  #state = "idle";
+  #error = null;
+  #loadPromise = null;
+  #generation = null; // { controller }
+  #config;
+
+  /**
+   * @param {object} opts
+   * @param {() => Promise<any>} [opts.importLlama] injectable for tests
+   * @param {object} opts.config  { contextTokens, temperature, maxTokens }
+   */
+  constructor({ importLlama = () => import("node-llama-cpp"), config = {} } = {}) {
+    super();
+    this.#llamaModule = importLlama;
+    this.#config = { contextTokens: 8192, temperature: 0.3, maxTokens: 1536, thinking: false, ...config };
+  }
+
+  get state() { return this.#state; }
+  get modelId() { return this.#modelId; }
+  get isBusy() { return this.#generation !== null; }
+
+  #setState(state, error = null) {
+    this.#state = state;
+    this.#error = error;
+    this.emit("state", { state, modelId: this.#modelId, error: error?.message ?? null });
+  }
+
+  status() {
+    return {
+      state: this.#state,
+      modelId: this.#modelId,
+      error: this.#error?.message ?? null,
+      contextTokens: this.#config.contextTokens,
+      busy: this.isBusy,
+    };
+  }
+
+  updateConfig(patch) {
+    this.#config = { ...this.#config, ...patch };
+  }
+
+  /**
+   * Load a model file. Re-loading the same path is a no-op; a different path swaps.
+   * @param {string} modelId
+   * @param {string} modelPath
+   */
+  async load(modelId, modelPath) {
+    if (this.#modelPath === modelPath && this.#state === "ready") return;
+    if (this.#loadPromise) {
+      await this.#loadPromise.catch(() => {});
+      if (this.#modelPath === modelPath && this.#state === "ready") return;
+    }
+    this.#loadPromise = this.#doLoad(modelId, modelPath).finally(() => {
+      this.#loadPromise = null;
+    });
+    return this.#loadPromise;
+  }
+
+  async #doLoad(modelId, modelPath) {
+    this.#setState("loading");
+    try {
+      await this.#disposeModel();
+
+      const mod = await this.#llamaModule();
+      if (!this.#llama) {
+        this.#llama = await mod.getLlama({
+          logLevel: mod.LlamaLogLevel?.warn ?? undefined,
+          logger: (level, message) => {
+            if (isBenignBackendNoise(message)) return;
+            this.emit("log", { level, message });
+          },
+        });
+      }
+
+      this.#model = await this.#llama.loadModel({ modelPath });
+
+      // Cap requested context by what the model actually supports.
+      const trainCtx = this.#model.trainContextSize ?? this.#config.contextTokens;
+      const contextSize = Math.max(2048, Math.min(this.#config.contextTokens, trainCtx));
+
+      this.#context = await this.#model.createContext({
+        contextSize,
+        threads: Math.max(2, Math.min(8, os.cpus().length - 2)),
+      });
+
+      const { LlamaChatSession } = mod;
+      this.#session = new LlamaChatSession({
+        contextSequence: this.#context.getSequence(),
+        systemPrompt: SYSTEM_PROMPT,
+        autoDisposeSequence: false,
+        ...this.#chatWrapperFor(modelId, mod),
+      });
+
+      this.#modelId = modelId;
+      this.#modelPath = modelPath;
+      this.#config.contextTokens = contextSize;
+      this.#setState("ready");
+    } catch (err) {
+      await this.#disposeModel();
+      this.#setState("error", err);
+      throw new Error(`Could not load the model: ${err.message}`);
+    }
+  }
+
+  /**
+   * Qwen3.5 is a hybrid reasoning model: left to its own devices it opens a <think>
+   * block and can spend the entire token budget in it, returning an empty answer. For
+   * spreadsheet work the reasoning buys nothing and costs several seconds a turn, so we
+   * discourage thoughts outright. Measured: 4.8s and an empty reply becomes 0.8s and a
+   * real one.
+   *
+   * Non-Qwen models fall through to node-llama-cpp's own template detection.
+   */
+  #chatWrapperFor(modelId, mod) {
+    if (this.#config.thinking) return {};
+    if (!/^qwen/i.test(modelId ?? "") || !mod.QwenChatWrapper) return {};
+    return {
+      chatWrapper: new mod.QwenChatWrapper({
+        thoughts: "discourage",
+        variation: /qwen3\.5/i.test(modelId) ? "3.5" : "3",
+      }),
+    };
+  }
+
+  async #disposeModel() {
+    try { await this.#session?.dispose?.(); } catch { /* ignore */ }
+    try { await this.#context?.dispose?.(); } catch { /* ignore */ }
+    try { await this.#model?.dispose?.(); } catch { /* ignore */ }
+    this.#session = null;
+    this.#context = null;
+    this.#model = null;
+    this.#modelId = null;
+    this.#modelPath = null;
+  }
+
+  async unload() {
+    this.abort();
+    await this.#disposeModel();
+    this.#setState("idle");
+  }
+
+  /** Clear conversation history but keep the model resident. */
+  async resetConversation() {
+    if (!this.#session) return;
+    await this.#session.resetChatHistory();
+  }
+
+  abort() {
+    this.#generation?.controller.abort();
+  }
+
+  /**
+   * Build node-llama-cpp function definitions from ACTION_SPECS. Each handler records a
+   * validated proposal; a rejected proposal returns its reason so the model can correct
+   * itself within the same turn instead of failing silently.
+   */
+  #buildFunctions(defineChatSessionFunction, proposals, rejections) {
+    const fns = {};
+    for (const [name, spec] of Object.entries(ACTION_SPECS)) {
+      fns[name] = defineChatSessionFunction({
+        description: spec.description,
+        params: spec.params,
+        handler: (args) => {
+          const result = validateAction(name, args);
+          if (result.ok) {
+            proposals.push(result.action);
+            this.emit("action", result.action);
+            return `Queued for the user to approve: ${result.action.summary}`;
+          }
+
+          // Without a cap, a model that keeps sending the same bad argument retries
+          // until it exhausts maxTokens and the user sees an empty reply. After a few
+          // attempts, tell it to give up and answer in words instead.
+          rejections.count += 1;
+          if (rejections.count >= MAX_TOOL_REJECTIONS) {
+            return (
+              `Rejected: ${result.error}. You have failed ${rejections.count} times — ` +
+              `stop calling tools now and explain to the user in plain words what you were trying to do.`
+            );
+          }
+          return `Rejected: ${result.error}. Fix the arguments and try again.`;
+        },
+      });
+    }
+    return fns;
+  }
+
+  /**
+   * Run one chat turn.
+   *
+   * @param {object} opts
+   * @param {string} opts.message        the user's question
+   * @param {object} [opts.sheetContext] worksheet context from the task pane
+   * @param {(chunk:string) => void} [opts.onToken] streamed text
+   * @returns {Promise<{text:string, actions:object[], stats:object}>}
+   */
+  async chat({ message, sheetContext, onToken }) {
+    if (this.#state !== "ready" || !this.#session) {
+      throw new Error(this.#state === "loading" ? "The model is still loading." : "No model is loaded.");
+    }
+    if (this.isBusy) throw new Error("Already generating a response.");
+
+    const mod = await this.#llamaModule();
+    const controller = new AbortController();
+    this.#generation = { controller };
+    this.#setState("generating");
+
+    const proposals = [];
+    const rejections = { count: 0 };
+    const startedAt = Date.now();
+    let tokenCount = 0;
+    let firstTokenAt = null;
+
+    try {
+      const prompt = buildUserTurn(message, sheetContext, this.#config.sheetContextTokens ?? 6000);
+
+      const text = await this.#session.prompt(prompt, {
+        temperature: this.#config.temperature,
+        maxTokens: this.#config.maxTokens,
+        signal: controller.signal,
+        stopOnAbortSignal: true,
+        // Belt and braces alongside the wrapper's "discourage": even if the model opens
+        // a thought block, it cannot spend the reply budget inside it.
+        budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
+        functions: this.#buildFunctions(mod.defineChatSessionFunction, proposals, rejections),
+        // Counting real tokens (not text chunks) keeps the reported rate honest — a
+        // chunk can carry several tokens, or none at all.
+        onResponseChunk: (chunk) => {
+          tokenCount += chunk.tokens?.length ?? 0;
+          if (firstTokenAt === null && chunk.tokens?.length) firstTokenAt = Date.now();
+          if (chunk.type === undefined && chunk.text) onToken?.(chunk.text);
+        },
+      });
+
+      const elapsed = (Date.now() - startedAt) / 1000;
+      // Rate is measured from the first token so it reflects decode speed rather than
+      // being dragged down by prompt ingestion.
+      const decodeSeconds = firstTokenAt ? (Date.now() - firstTokenAt) / 1000 : elapsed;
+      return {
+        text: (text ?? "").trim(),
+        actions: proposals,
+        stats: {
+          seconds: Number(elapsed.toFixed(2)),
+          tokens: tokenCount,
+          tokensPerSecond: decodeSeconds > 0.05 ? Number((tokenCount / decodeSeconds).toFixed(1)) : 0,
+        },
+      };
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return { text: "", actions: proposals, stats: { aborted: true } };
+      }
+      throw err;
+    } finally {
+      this.#generation = null;
+      if (this.#state === "generating") this.#setState("ready");
+    }
+  }
+}
