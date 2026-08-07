@@ -139,11 +139,30 @@ function buildDetails(action) {
 }
 
 /**
+ * Enable the action buttons on every card still waiting for its reply to finish.
+ *
+ * Cards are built while the reply is streaming, but the engine is single-threaded:
+ * clicking Apply mid-stream always fails with "the model is busy". So cards start
+ * disarmed and only go live when the turn completes.
+ */
+export function armProposals(root) {
+  for (const card of root.querySelectorAll(".proposal[data-waiting]")) {
+    delete card.dataset.waiting;
+    card.querySelector(".proposal__wait")?.remove();
+    for (const btn of card.querySelectorAll(".proposal__actions .btn")) btn.disabled = false;
+  }
+}
+
+/**
  * Build the proposed-change card.
  * @param {object} action
- * @param {{onApply:Function,onDismiss:Function,onUndo:Function}} handlers
+ * @param {{onApply:Function,onDismiss:Function,canApply?:() => true|string}} handlers
+ *   `canApply` is consulted at click time; a string return blocks the apply and is
+ *   shown as the reason (the engine can only do one thing at a time).
+ * @param {{deferActions?:boolean}} [opts]  start with the buttons disabled until
+ *   `armProposals` runs — used while the reply is still streaming.
  */
-export function buildProposal(action, handlers) {
+export function buildProposal(action, handlers, { deferActions = false } = {}) {
   const card = el("div", "proposal");
   card.dataset.status = "pending";
 
@@ -153,7 +172,7 @@ export function buildProposal(action, handlers) {
   head.appendChild(addr);
   card.appendChild(head);
 
-  const isTransform = action.type === "transform_column" || action.type === "split_column";
+  const isTransform = action.type === "transform_column" || action.type === "split_column" || action.type === "extract_table";
   const showsGrid = action.type === "write_formula" || action.type === "write_values";
 
   let transform = null;
@@ -165,10 +184,20 @@ export function buildProposal(action, handlers) {
     if (showsGrid) card.appendChild(buildGrid(action));
   }
 
+  const applyLabel = action.type === "extract_table"
+    ? "Extract records"
+    : isTransform ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows` : "Apply";
+
   const actions = el("div", "proposal__actions");
-  const apply = el("button", "btn btn--primary", isTransform ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows` : "Apply");
+  const apply = el("button", "btn btn--primary", applyLabel);
   const dismiss = el("button", "btn btn--quiet", "Dismiss");
   actions.append(apply, dismiss);
+  if (deferActions) {
+    apply.disabled = true;
+    dismiss.disabled = true;
+    card.dataset.waiting = "true";
+    actions.appendChild(el("span", "proposal__wait", "Available when the reply finishes…"));
+  }
   card.appendChild(actions);
 
   /** Set while a long transform is running so Dismiss can act as Stop. */
@@ -203,12 +232,23 @@ export function buildProposal(action, handlers) {
   };
 
   apply.addEventListener("click", async () => {
-    apply.disabled = true;
-    dismiss.disabled = true;
-    apply.textContent = isTransform ? "Working…" : "Applying…";
     // Clear any failure from a previous attempt; leaving it up next to a success
     // receipt tells the user two contradictory things at once.
     card.querySelector(".proposal__error")?.remove();
+
+    // The engine does one thing at a time. Refusing here, with the reason, beats
+    // firing the request and surfacing "the model is busy" as a failure.
+    const blocked = handlers.canApply?.();
+    if (typeof blocked === "string") {
+      const notice = el("div", "proposal__summary proposal__error", blocked);
+      notice.style.color = "var(--amber)";
+      card.insertBefore(notice, actions);
+      return;
+    }
+
+    apply.disabled = true;
+    dismiss.disabled = true;
+    apply.textContent = isTransform ? "Working…" : "Applying…";
 
     // A column rewrite runs for minutes, so it reports progress and can be stopped.
     if (isTransform) {
@@ -226,10 +266,11 @@ export function buildProposal(action, handlers) {
           transform.label.textContent =
             phase === "reading" ? "Reading the column…" : phase === "writing" ? "Writing results…" : "Starting…";
         },
-        onProgress: ({ done, total, sample }) => {
+        onProgress: ({ done, total, sample, records }) => {
           if (!isTransform) return;
           transform.bar.style.width = `${Math.max(2, (done / total) * 100).toFixed(1)}%`;
-          transform.label.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} rows`;
+          transform.label.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} rows`
+            + (records != null ? ` · ${records.toLocaleString()} record${records === 1 ? "" : "s"} found` : "");
           if (sample?.length) {
             transform.sample.hidden = false;
             transform.sample.textContent = "";
@@ -280,7 +321,7 @@ export function buildProposal(action, handlers) {
       }
       apply.disabled = false;
       dismiss.disabled = false;
-      apply.textContent = isTransform ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows` : "Apply";
+      apply.textContent = applyLabel;
       const error = card.querySelector(".proposal__error") ?? el("div", "proposal__summary proposal__error");
       error.textContent = `Could not apply: ${err.message}`;
       error.style.color = "var(--danger)";

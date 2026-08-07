@@ -1,12 +1,13 @@
 /**
- * Row-by-row column transformation, streamed.
+ * Row-by-row column transformation and whole-range record extraction, streamed.
  *
  * The task pane reads the source values out of Excel and posts them here; the model
- * rewrites each one and the results stream back with progress. A long job needs to show
+ * does the work and the results stream back with progress. A long job needs to show
  * that it is alive, so progress frames are emitted as batches land.
  */
 import { sseFrame } from "./chat.js";
 import { MAX_TRANSFORM_ROWS } from "../../llm/transform.js";
+import { MAX_EXTRACT_ROWS } from "../../llm/extract.js";
 
 export function registerTransformRoutes(routes, { engine, json, readJsonBody }) {
   routes.set("POST /api/transform", async (req, res) => {
@@ -68,5 +69,61 @@ export function registerTransformRoutes(routes, { engine, json, readJsonBody }) 
   routes.set("POST /api/transform/abort", async (_req, res) => {
     engine.abort();
     json(res, 200, { ok: true });
+  });
+
+  routes.set("POST /api/extract", async (req, res) => {
+    let body;
+    try {
+      body = await readJsonBody(req, { limit: 16_000_000 });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+
+    const values = Array.isArray(body.values) ? body.values.map((v) => (v == null ? "" : String(v))) : null;
+    const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
+    const fields = Array.isArray(body.fields)
+      ? body.fields.map((f) => String(f).trim()).filter(Boolean).slice(0, 20)
+      : [];
+
+    if (!values?.length) return json(res, 400, { error: "values is required" });
+    if (values.length > MAX_EXTRACT_ROWS) {
+      return json(res, 400, { error: `That is ${values.length} rows; the limit is ${MAX_EXTRACT_ROWS}.` });
+    }
+    if (!instruction) return json(res, 400, { error: "instruction is required" });
+    if (!fields.length) return json(res, 400, { error: "fields is required" });
+
+    const status = engine.status();
+    if (status.state !== "ready") return json(res, 503, { error: status.error || "No model is loaded." });
+    if (status.busy) return json(res, 409, { error: "The model is busy." });
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write(sseFrame("start", { total: values.length }));
+
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    req.on("close", onClose);
+
+    try {
+      const { records, failed } = await engine.extract({
+        values,
+        instruction,
+        fields,
+        signal: controller.signal,
+        onProgress: (p) => res.write(sseFrame("progress", p)),
+      });
+      res.write(sseFrame("done", { records, failed }));
+    } catch (err) {
+      res.write(sseFrame("error", {
+        message: err.code === "ABORTED" ? "Extraction cancelled" : err.message || "Extraction failed",
+      }));
+    } finally {
+      req.off("close", onClose);
+      res.end();
+    }
   });
 }

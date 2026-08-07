@@ -116,39 +116,46 @@ export const deleteConversation = (id) => request("/api/conversations/delete", {
 export const resumeConversation = (id) => request("/api/conversations/resume", { method: "POST", body: JSON.stringify({ id }) });
 
 /**
- * Stream a whole-column transformation.
- * @returns {() => void} abort
+ * Stream a long model job (column transform, record extraction) as SSE.
+ * @returns {(body:object, handlers:object) => () => void} the returned fn aborts
  */
-export function streamTransform(body, handlers) {
-  const controller = new AbortController();
+function streamJob(path, failureLabel) {
+  return (body, handlers) => {
+    const controller = new AbortController();
 
-  (async () => {
-    try {
-      const res = await fetch("/api/transform", {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        if (isStaleSession(res.status)) onSessionExpired?.();
-        let message = `Request failed (${res.status})`;
-        try { message = (await res.json()).error || message; } catch { /* keep status */ }
-        handlers.onError?.(message);
-        return;
+    (async () => {
+      try {
+        const res = await fetch(path, {
+          method: "POST",
+          headers: HEADERS,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          if (isStaleSession(res.status)) onSessionExpired?.();
+          let message = `Request failed (${res.status})`;
+          try { message = (await res.json()).error || message; } catch { /* keep status */ }
+          handlers.onError?.(message);
+          return;
+        }
+        await readSse(res, {
+          progress: (p) => handlers.onProgress?.(p),
+          done: (p) => handlers.onDone?.(p),
+          error: (p) => handlers.onError?.(p.message),
+        });
+      } catch (err) {
+        if (err.name !== "AbortError") handlers.onError?.(err.message || failureLabel);
       }
-      await readSse(res, {
-        progress: (p) => handlers.onProgress?.(p),
-        done: (p) => handlers.onDone?.(p),
-        error: (p) => handlers.onError?.(p.message),
-      });
-    } catch (err) {
-      if (err.name !== "AbortError") handlers.onError?.(err.message || "Transform failed");
-    }
-  })();
+    })();
 
-  return () => controller.abort();
+    return () => controller.abort();
+  };
 }
+
+/** Stream a whole-column transformation. Returns an abort fn. */
+export const streamTransform = streamJob("/api/transform", "Transform failed");
+/** Stream a whole-range record extraction. Returns an abort fn. */
+export const streamExtract = streamJob("/api/extract", "Extraction failed");
 
 /**
  * Read an SSE body, dispatching each frame to a handler by event name.

@@ -380,9 +380,19 @@ html, body { height: 100%; overflow: hidden; }
 
 .proposal__actions {
   display: flex;
+  align-items: center;
   gap: var(--step);
   padding: calc(var(--step) * 2);
   border-top: 1px solid var(--rule);
+}
+
+/* Shown while the reply is still streaming and the buttons are disarmed. */
+.proposal__wait {
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .btn {

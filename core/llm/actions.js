@@ -337,6 +337,106 @@ export const ACTION_SPECS = {
     },
   },
 
+  extract_table: {
+    description:
+      "Rebuild a messy range as a clean table of records. Use when the data is NOT one record " +
+      "per row: a record's fields spread down several consecutive rows, several complete records " +
+      "packed into one cell, or a mix of layouts. Reads the ENTIRE range as one document — every " +
+      "row, with its neighbours for context — finds each distinct record, and writes one row per " +
+      "record under the named columns. The number of output rows follows the number of records " +
+      "found, not the number of input rows. For data that IS already one record per row, use " +
+      "split_column or transform_column instead.",
+    params: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description: 'Range to read, e.g. "A2:A40". Include every row the messy data occupies.',
+        },
+        target: {
+          type: "string",
+          description:
+            'Top-left cell where the first record goes, e.g. "C2". Column headers are written ' +
+            "in the row above it. Must not overlap the source columns.",
+        },
+        columns: {
+          type: "array",
+          description: 'Output column headers, in order, e.g. ["Name","Street","City","State","ZIP"].',
+          items: { type: "string" },
+        },
+        instruction: {
+          type: "string",
+          description: "What one record is in this data, and how to fill each column from it.",
+        },
+        sheet: { type: "string" },
+      },
+      required: ["source", "target", "columns", "instruction"],
+    },
+    validate(args, context) {
+      const source = parseRange(args.sheet ? `${args.sheet}!${args.source}` : args.source);
+      const target = parseRange(args.sheet ? `${args.sheet}!${args.target}` : args.target);
+
+      const columns = (Array.isArray(args.columns) ? args.columns : [])
+        .map((c) => String(c ?? "").trim())
+        .filter(Boolean);
+      if (columns.length < 1) throw new Error("extract_table needs at least one output column");
+      if (columns.length > 20) throw new Error("extract_table supports at most 20 output columns");
+
+      const instruction = String(args.instruction ?? "").trim();
+      if (instruction.length < 8) throw new Error("instruction must describe what one record is");
+      if (instruction.length > 2000) throw new Error("instruction is too long");
+
+      let sourceEnd = source.end.row;
+      const lastDataRow = context?.lastRow;
+      let clamped = false;
+      if (Number.isInteger(lastDataRow) && sourceEnd > lastDataRow && source.start.row <= lastDataRow) {
+        sourceEnd = lastDataRow;
+        clamped = true;
+      }
+
+      const rows = sourceEnd - source.start.row + 1;
+      if (rows < 1) throw new Error("The source range is empty");
+      if (rows > 2000) throw new Error(`That is ${rows} rows; the limit is 2000`);
+
+      // The record count is unknown until the extraction runs, so any column overlap
+      // with the source could overwrite data still being read. Refuse it outright.
+      const targetEndCol = target.start.col + columns.length - 1;
+      if (target.start.col <= source.end.col && targetEndCol >= source.start.col) {
+        throw new Error(
+          `The table would overwrite the source columns ` +
+          `${indexToColumn(source.start.col)}–${indexToColumn(source.end.col)}. Pick a target to their right.`,
+        );
+      }
+
+      const sourceAddress =
+        `${indexToColumn(source.start.col)}${source.start.row}:${indexToColumn(source.end.col)}${sourceEnd}`;
+      const targetCell = `${indexToColumn(target.start.col)}${target.start.row}`;
+      const headerAddress = target.start.row > 1
+        ? `${indexToColumn(target.start.col)}${target.start.row - 1}:${indexToColumn(targetEndCol)}${target.start.row - 1}`
+        : null;
+
+      return {
+        type: "extract_table",
+        sheet: source.sheet ?? target.sheet,
+        source: sourceAddress,
+        // The final block size depends on how many records exist; until the run
+        // finishes, the target anchor is the honest address to show and reveal.
+        address: targetCell,
+        targetCol: target.start.col,
+        targetRow: target.start.row,
+        headerAddress,
+        columns,
+        instruction,
+        rows,
+        clamped,
+        summary:
+          `Read ${sourceAddress} (${rows} row${rows === 1 ? "" : "s"}) and rebuild it as a table ` +
+          `(${columns.join(", ")}) starting at ${targetCell}` +
+          (clamped ? " (trimmed to the rows that contain data)" : ""),
+      };
+    },
+  },
+
   format_cells: {
     description:
       "Change how a range looks: number format, bold, italic, or background colour. " +

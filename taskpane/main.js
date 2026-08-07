@@ -4,8 +4,8 @@
 import * as api from "./api.js";
 import { readSheetContext, describeSelection } from "./sheet/context.js";
 import { applyAction, revealRange } from "./sheet/apply.js";
-import { runTransform } from "./sheet/transform.js";
-import { el, buildTurn, buildProposal, renderProse } from "./ui/render.js";
+import { runTransform, runExtract } from "./sheet/transform.js";
+import { el, buildTurn, buildProposal, armProposals, renderProse } from "./ui/render.js";
 import { createHistoryPanel } from "./ui/history.js";
 
 const dom = {};
@@ -450,11 +450,19 @@ async function submit() {
           answer.body.textContent = "";
           firstToken = false;
         }
-        answer.turn.appendChild(buildProposal(action, { onApply: applyProposal }));
+        // The card appears while the reply is still streaming, but its buttons stay
+        // disabled until the turn ends — the engine can only do one thing at a time,
+        // so an early click would just be refused as busy.
+        answer.turn.appendChild(buildProposal(
+          action,
+          { onApply: applyProposal, canApply: whyApplyIsBlocked },
+          { deferActions: true },
+        ));
         scrollToEnd();
       },
       onDone: ({ text: finalText, stats, actions }) => {
         caret.remove();
+        armProposals(answer.turn);
         if (finalText) renderProse(answer.body, finalText);
         else if (firstToken) answer.body.remove();
         recordMessage("assistant", finalText || text, {
@@ -474,6 +482,8 @@ async function submit() {
       onError: (failure) => {
         caret.remove();
         pending.remove();
+        // The engine is free again, so any proposals that did arrive are usable.
+        armProposals(answer.turn);
         if (firstToken) answer.turn.remove();
         const errorTurn = buildTurn("error");
         errorTurn.body.textContent = failure;
@@ -495,11 +505,24 @@ async function submit() {
  */
 /** Actions that stream every row through the model rather than writing in one shot. */
 const BATCHED_ACTIONS = new Set(["transform_column", "split_column"]);
+/** Reads a whole range through the model and writes one row per record it finds. */
+const EXTRACT_ACTION = "extract_table";
+
+/**
+ * Why an Apply click cannot run right now, or true when it can.
+ * Old cards stay clickable across turns, so this is checked at click time too.
+ */
+function whyApplyIsBlocked() {
+  if (state.busy) return "Wait for the current reply to finish, then apply.";
+  return true;
+}
 
 async function applyProposal(action, handlers) {
-  const result = BATCHED_ACTIONS.has(action.type)
-    ? await runTransform(action, handlers)
-    : await applyAction(action);
+  const result = action.type === EXTRACT_ACTION
+    ? await runExtract(action, handlers)
+    : BATCHED_ACTIONS.has(action.type)
+      ? await runTransform(action, handlers)
+      : await applyAction(action);
 
   revealRange(action).catch(() => {});
   refreshSelection();

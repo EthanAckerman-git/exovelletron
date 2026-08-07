@@ -6,12 +6,23 @@
  * because that work can take minutes and holding a batch open across it would stall the
  * host.
  */
-import { streamTransform } from "../api.js";
+import { streamTransform, streamExtract } from "../api.js";
 
 const targetSheet = (ctx, name) =>
   name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
 
 const flatten = (values) => values.map((row) => (row[0] == null ? "" : String(row[0])));
+
+const indexToColumn = (index) => {
+  let n = index;
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+};
 
 /**
  * @param {object} action  a validated transform_column action
@@ -81,6 +92,95 @@ export async function runTransform(action, handlers = {}) {
       await Excel.run(async (ctx) => {
         const sheet = targetSheet(ctx, action.sheet);
         sheet.getRange(action.address).formulas = snapshot.body;
+        if (action.headerAddress && snapshot.header) {
+          sheet.getRange(action.headerAddress).formulas = snapshot.header;
+        }
+        await ctx.sync();
+      });
+    },
+  };
+}
+
+/**
+ * Runs a whole-range record extraction: read the source out of Excel, let the model
+ * find every record in it, write them as a table at the target.
+ *
+ * The output size is unknown until the model finishes — a range where each record
+ * spans five rows shrinks, and a cell packing a dozen records grows. So the undo
+ * snapshot is taken AFTER the model runs but BEFORE anything is written: by then the
+ * record count, and therefore the exact target block, is known, and the sheet is
+ * still untouched.
+ *
+ * @param {object} action  a validated extract_table action
+ * @param {object} handlers { onProgress({done,total,records,sample}), onPhase(name), onCancelHandle(fn) }
+ */
+export async function runExtract(action, handlers = {}) {
+  handlers.onPhase?.("reading");
+
+  // Multi-column sources are read row by row; cells in a row are joined so each
+  // line the model sees corresponds to one sheet row.
+  const source = await Excel.run(async (ctx) => {
+    const range = targetSheet(ctx, action.sheet).getRange(action.source);
+    range.load(["values"]);
+    await ctx.sync();
+    return range.values.map((row) =>
+      row.map((cell) => (cell == null ? "" : String(cell))).filter((s) => s.trim() !== "").join(" | "));
+  });
+
+  if (!source.some((line) => line.trim() !== "")) throw new Error("The source range is empty.");
+
+  handlers.onPhase?.("transforming");
+
+  const { records, failed } = await new Promise((resolve, reject) => {
+    const cancel = streamExtract(
+      { values: source, instruction: action.instruction, fields: action.columns },
+      {
+        onProgress: (p) => handlers.onProgress?.(p),
+        onDone: (payload) => resolve(payload),
+        onError: (message) => reject(new Error(message)),
+      },
+    );
+    handlers.onCancelHandle?.(cancel);
+  });
+
+  if (!records.length) {
+    throw new Error("No records were found in the source range. Nothing was written.");
+  }
+
+  const width = action.columns.length;
+  const endCol = indexToColumn(action.targetCol + width - 1);
+  const address = `${indexToColumn(action.targetCol)}${action.targetRow}:${endCol}${action.targetRow + records.length - 1}`;
+
+  const snapshot = await Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    const range = sheet.getRange(address);
+    range.load(["formulas"]);
+    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
+    header?.load(["formulas"]);
+    await ctx.sync();
+    return { body: range.formulas, header: header ? header.formulas : null };
+  });
+
+  handlers.onPhase?.("writing");
+
+  await Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    sheet.getRange(address).values = records;
+    if (action.headerAddress) sheet.getRange(action.headerAddress).values = [action.columns];
+    await ctx.sync();
+  });
+
+  // The block is real now; point reveal, history, and the card at all of it.
+  action.address = address;
+
+  return {
+    message: `${records.length} record${records.length === 1 ? "" : "s"} written to ${address}`,
+    failed,
+    results: records,
+    undo: async () => {
+      await Excel.run(async (ctx) => {
+        const sheet = targetSheet(ctx, action.sheet);
+        sheet.getRange(address).formulas = snapshot.body;
         if (action.headerAddress && snapshot.header) {
           sheet.getRange(action.headerAddress).formulas = snapshot.header;
         }

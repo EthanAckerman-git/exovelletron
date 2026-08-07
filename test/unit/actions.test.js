@@ -254,6 +254,50 @@ describe("validateAction: sort_range", () => {
   });
 });
 
+describe("validateAction: extract_table", () => {
+  const base = {
+    source: "A2:A40",
+    target: "C2",
+    columns: ["Name", "Street", "City", "State", "ZIP"],
+    instruction: "Each record is one person's mailing address; fields may span several rows.",
+  };
+
+  it("accepts a messy range and anchors the output at the target cell", () => {
+    const { action } = validateAction("extract_table", base);
+    expect(action).toMatchObject({
+      type: "extract_table",
+      source: "A2:A40",
+      address: "C2",
+      targetCol: 3,
+      targetRow: 2,
+      headerAddress: "C1:G1",
+      rows: 39,
+    });
+  });
+
+  it("clamps the source to the rows that actually hold data", () => {
+    const { action } = validateAction("extract_table", { ...base, source: "A2:A1000" }, { lastRow: 21 });
+    expect(action.source).toBe("A2:A21");
+    expect(action.rows).toBe(20);
+    expect(action.clamped).toBe(true);
+  });
+
+  it("refuses a target that would overwrite the source while it is being read", () => {
+    const result = validateAction("extract_table", { ...base, target: "A2" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/overwrite the source/);
+  });
+
+  it("writes no header row when the table starts on row 1", () => {
+    expect(validateAction("extract_table", { ...base, target: "C1" }).action.headerAddress).toBeNull();
+  });
+
+  it("requires at least one named column and a real instruction", () => {
+    expect(validateAction("extract_table", { ...base, columns: ["", "  "] }).ok).toBe(false);
+    expect(validateAction("extract_table", { ...base, instruction: "do it" }).ok).toBe(false);
+  });
+});
+
 describe("validateAction: insert_column", () => {
   it("accepts a column letter and header", () => {
     expect(validateAction("insert_column", { before: "d", header: "Margin" }).action)

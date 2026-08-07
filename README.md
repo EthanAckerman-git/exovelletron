@@ -20,6 +20,7 @@ Everything runs on your own Mac. No account, no API key, no internet after setup
 | **Explain your data** | "What am I looking at?" — it reads your selection and tells you. |
 | **Write formulas** | Describe the calculation; it fills the column and adjusts references per row. |
 | **Split messy columns** | One cell holding `"NAME 123 MAIN ST","CITY","ST","12345"`? It breaks that into proper named columns. |
+| **Rebuild truly messy data** | Records with fields stacked down separate rows, or a dozen records crammed into one cell? It reads the whole range in context and rebuilds it as a clean table — one row per record. |
 | **Clean up values** | Standardise addresses to USPS format, fix inconsistent dates, normalise names — across **every row**, not just the ones on screen. |
 | **Format the sheet** | Bold headers, fills, currency and date formats. |
 | **Find problems** | Blanks, duplicates, values that look wrong. |

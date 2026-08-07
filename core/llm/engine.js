@@ -314,6 +314,82 @@ export class Engine extends EventEmitter {
     }
   }
 
+  /**
+   * Rebuild a messy range as a table of records.
+   *
+   * Unlike `transform`, the input is read as one document: the model sees each chunk of
+   * lines with its neighbours, so a record whose fields are stacked down several rows —
+   * or a cell holding a dozen records — comes out as clean rows. The output row count is
+   * untied from the input row count. Same lifecycle as `transform`: a short-lived
+   * context, disposed as soon as the job ends.
+   *
+   * @param {object} opts
+   * @param {string[]} opts.values      source rows as text, in order
+   * @param {string} opts.instruction
+   * @param {string[]} opts.fields      output column names
+   * @param {(p:{done:number,total:number,records:number,sample:string[][]}) => void} [opts.onProgress]
+   * @param {AbortSignal} [opts.signal]
+   */
+  async extract({ values, instruction, fields, onProgress, signal }) {
+    if (this.#state !== "ready" || !this.#model) throw new Error("No model is loaded.");
+    if (this.isBusy) throw new Error("The model is busy answering a message.");
+
+    const mod = await this.#llamaModule();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    this.#generation = { controller };
+    this.#setState("generating");
+
+    let context = null;
+
+    try {
+      // Extraction replies repeat every field name for every record, so they run long;
+      // the context is sized for a full chunk in and a full record list out.
+      const trainCtx = this.#model.trainContextSize ?? 8192;
+      context = await this.#model.createContext({ contextSize: Math.min(8192, trainCtx) });
+      const session = new mod.LlamaChatSession({
+        contextSequence: context.getSequence(),
+        systemPrompt:
+          "You extract structured records from messy spreadsheet data. You return only the " +
+          "records, as JSON in the requested shape. A field the input does not contain is an " +
+          "empty string; you never invent data and never add commentary.",
+        ...this.#chatWrapperFor(this.#modelId, mod),
+      });
+
+      const complete = async (prompt, schema) => {
+        const grammar = await this.#llama.createGrammarForJsonSchema(schema);
+        // Each chunk stands alone; resetting stops earlier chunks steering later ones.
+        await session.resetChatHistory();
+        const raw = await session.prompt(prompt, {
+          grammar,
+          temperature: 0,
+          maxTokens: 4096,
+          signal: controller.signal,
+          stopOnAbortSignal: true,
+          budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
+        });
+        return grammar.parse(raw);
+      };
+
+      const { extractRecords } = await import("./extract.js");
+      return await extractRecords({
+        values,
+        instruction,
+        fields,
+        complete,
+        signal: controller.signal,
+        onProgress,
+      });
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      try { await context?.dispose?.(); } catch { /* already gone */ }
+      this.#generation = null;
+      if (this.#state === "generating") this.#setState("ready");
+    }
+  }
+
   abort() {
     this.#generation?.controller.abort();
   }

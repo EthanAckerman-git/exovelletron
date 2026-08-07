@@ -36,10 +36,13 @@ call is validated into a normalized action; the pane renders that action as a pr
 waits. Applying snapshots the prior cell *formulas* — not values, so a formula is never
 silently flattened into a literal — which backs a one-step Undo.
 
-**Two paths for sheet work.** Chat sees a bounded sample of rows. Anything that needs
+**Three paths for sheet work.** Chat sees a bounded sample of rows. Anything that needs
 every row (splitting a column, standardising 500 addresses) goes down a separate batched
 path that streams the whole column through the model in small chunks. Trying to serve both
 from the chat context would either blow the window or quietly operate on a sample.
+And data that is not one-record-per-row at all — fields stacked down several rows, a dozen
+records packed into one cell — goes down a third path, `extract_table`, which reads the
+range as one document and writes one row per record it finds (see below).
 
 ## Module boundaries
 
@@ -50,6 +53,7 @@ from the chat context would either blow the window or quietly operate on a sampl
 | `llm/engine.js` | Model lifecycle, streaming, tool plumbing |
 | `llm/actions.js` | The action vocabulary, schemas, validators |
 | `llm/transform.js` | Batched row-by-row work, alignment safety |
+| `llm/extract.js` | Whole-range record extraction, blank-line chunking |
 | `llm/prompt.js` | System prompt, worksheet rendering, token budget |
 | `models/` | Catalog, resumable verified downloads, on-disk state |
 | `history/` | Conversation persistence |
@@ -106,6 +110,21 @@ data that needs six, the leftover text simply vanishes and the sheet looks fine.
 compares how many meaningful characters survive each row and warns when a row lost too
 much. This is measured only for splits — a rewrite is *supposed* to get shorter.
 
+**Row-by-row processing cannot fix data that is not one-record-per-row.** The transform
+prompt orders the model to treat every line independently — exactly right for
+"standardise each address", structurally incapable of assembling a record whose name,
+street, and city sit on three separate rows, or of unpacking a cell holding a dozen CSV
+records. `extract_table` exists for that mess: it reads the whole range as one document,
+uses neighbouring rows to assemble each record, and writes one row per record — the
+output row count deliberately untied from the input's. Chunks are cut at blank lines so a
+stacked record is never severed, and the undo snapshot is taken after the model runs but
+before anything is written, once the exact output size is known.
+
+**Proposal cards must not go live while the reply is still streaming.** Tool calls arrive
+mid-stream and used to render with a clickable Apply, but the engine does one thing at a
+time — an early click always failed with "the model is busy". Cards now appear disarmed
+and are enabled when the turn ends, with a click-time guard for cards from earlier turns.
+
 ## The add-in installation constraint
 
 Excel reads sideloaded manifests from
@@ -134,7 +153,7 @@ already pointing at `wef`. A Finder drag also works and is kept as a fallback.
 
 ## Testing
 
-172 tests. Alongside the ordinary coverage, there is a regression test for every finding
+216 tests. Alongside the ordinary coverage, there is a regression test for every finding
 above — including one that reads the task pane's routing table and asserts that every
 action the model can propose has an apply path, after `split_column` shipped without one.
 
