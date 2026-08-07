@@ -19,7 +19,7 @@ import { paths as defaultPaths } from "../config.js";
 
 const run = promisify(execFile);
 
-export const CA_COMMON_NAME = "Excel AI Local Development CA";
+export const CA_COMMON_NAME = "Exovelletron Development CA";
 
 /**
  * The root is trusted once and lives long, because re-trusting means another macOS
@@ -87,7 +87,7 @@ export async function generateCa(p = defaultPaths) {
     "req", "-x509", "-newkey", "rsa:2048", "-nodes",
     "-keyout", f.caKey, "-out", f.caCert,
     "-days", String(CA_DAYS),
-    "-subj", `/CN=${CA_COMMON_NAME}/O=Excel AI Local`,
+    "-subj", `/CN=${CA_COMMON_NAME}/O=Exovelletron`,
     "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
     "-addext", "keyUsage=critical,keyCertSign,cRLSign",
   ]);
@@ -125,7 +125,7 @@ export async function generateLeaf(p = defaultPaths) {
     await run("openssl", [
       "req", "-newkey", "rsa:2048", "-nodes",
       "-keyout", f.key, "-out", csr,
-      "-subj", "/CN=localhost/O=Excel AI Local",
+      "-subj", "/CN=localhost/O=Exovelletron",
     ]);
     await run("openssl", [
       "x509", "-req", "-in", csr,

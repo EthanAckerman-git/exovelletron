@@ -31,6 +31,8 @@ async function main() {
       bundle: true, format: "esm", target: ["safari16"], logLevel: "warning",
     });
     await cp(path.join(ROOT, "taskpane", "preview.html"), path.join(DIST, "app", "preview.html"));
+    await cp(path.join(ROOT, "taskpane", "debug.html"), path.join(DIST, "app", "debug.html"));
+    await cp(path.join(ROOT, "taskpane", "debug-pane.html"), path.join(DIST, "app", "debug-pane.html"));
   }
 
   await build({

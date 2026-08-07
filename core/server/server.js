@@ -13,6 +13,8 @@ import { mintToken, authorizeApiRequest, securityHeaders, TOKEN_HEADER } from ".
 import { registerStatusRoutes } from "./routes/status.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerModelRoutes } from "./routes/models.js";
+import { registerConversationRoutes } from "./routes/conversations.js";
+import { registerTransformRoutes } from "./routes/transform.js";
 
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "dist");
 
@@ -52,7 +54,7 @@ export async function readJsonBody(req, { limit = 4_000_000 } = {}) {
  * @param {object} deps.models     model store (see core/models/store.js)
  * @param {object} [deps.appInfo]  { version }
  */
-export function createAppServer({ credentials, port, engine, models, appInfo = {} }) {
+export function createAppServer({ credentials, port, engine, models, history, appInfo = {} }) {
   const token = mintToken();
   /**
    * The port actually in use. It only diverges from the requested one when binding to
@@ -64,11 +66,13 @@ export function createAppServer({ credentials, port, engine, models, appInfo = {
   /** @type {Map<string, (req, res, ctx) => Promise<boolean|void>>} */
   const routes = new Map();
 
-  const ctx = { engine, models, token, get port() { return boundPort; }, appInfo, json, readJsonBody };
+  const ctx = { engine, models, history, token, get port() { return boundPort; }, appInfo, json, readJsonBody };
 
   registerStatusRoutes(routes, ctx);
   registerChatRoutes(routes, ctx);
   registerModelRoutes(routes, ctx);
+  if (history) registerConversationRoutes(routes, ctx);
+  registerTransformRoutes(routes, ctx);
 
   async function serveHtml(file, res) {
     let html = await readFile(path.join(DIST, file), "utf8");

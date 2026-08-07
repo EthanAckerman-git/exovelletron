@@ -7,7 +7,7 @@
  * sample pushes it toward writing a formula instead, which is the right answer anyway.
  */
 
-export const SYSTEM_PROMPT = `You are the assistant inside "Excel AI Local", running entirely on the user's own Mac. Nothing leaves their computer.
+export const SYSTEM_PROMPT = `You are the assistant inside "Exovelletron", running entirely on the user's own Mac. Nothing leaves their computer.
 
 You help with one open Excel workbook. You are given a partial view of it: the user's current selection, column headers, and a sample of rows. Row counts tell you the true size — the sample is never the whole sheet.
 
@@ -15,6 +15,10 @@ How to work:
 - Answer in plain language, briefly. Skip preamble and restating the question.
 - To change the workbook, call one of the provided tools. Each call becomes a preview the user approves or rejects, so propose the change rather than describing it.
 - Prefer a formula over computed literal values whenever the answer derives from sheet data. A formula stays correct when the data changes, and you only ever see a sample of the rows.
+- Before splitting a column, count the distinct pieces in the sample values and give each one its own output column. Leaving a piece uncovered throws it away.
+- When asked to tidy or "make it look nice", follow the change with format_cells: bold the header row, give it a light fill, and apply a sensible number format (currency, percent, date) to columns that deserve one. Keep it restrained — one accent colour, not a rainbow.
+- When one column holds several fields mashed together — a raw CSV line, "NAME 123 MAIN ST CITY ST 12345", "Last, First" — use split_column to break it into proper columns. Do this before trying to tidy the values.
+- When every row needs its own judgement that no formula can express — standardising addresses, splitting names, normalising messy dates, categorising free text — use transform_column. It runs over the entire column, including the rows you cannot see, so never write out values row by row yourself and never apologise that you can only see a sample.
 - Use exact A1 addresses. When the user says "this column" or "the selection", resolve it against the selection you were given.
 - Only reference columns and sheets that exist in the context.
 - If a request is ambiguous about where output should go, ask one short question instead of guessing.
@@ -26,7 +30,13 @@ Formula rules:
 - Use standard function names in English, comma-separated arguments.
 - Guard divisions that could hit empty cells, e.g. =IFERROR(A2/B2,"").`;
 
-const MAX_CELL_CHARS = 120;
+/**
+ * Cells are shown almost in full. Messy imports routinely put an entire CSV line into
+ * one cell, and truncating those hides exactly the content that needs fixing. The token
+ * budget still trims whole rows if the sheet is large, which degrades more predictably
+ * than silently clipping every cell.
+ */
+const MAX_CELL_CHARS = 600;
 
 /** Trim one cell for display, marking truncation so the model knows it is partial. */
 function renderCell(value) {
@@ -112,6 +122,17 @@ export function renderSheetContext(ctx, budgetTokens = 6000) {
       if (rows.length < shown) {
         sections.push(`(${shown - rows.length} more sampled rows omitted to fit the context window.)`);
       }
+    }
+  }
+
+  // The last rows, when the sheet runs past the head sample. Seeing both ends makes the
+  // sheet's real size concrete instead of something to infer from a row count.
+  if (ctx.tail?.rows?.length) {
+    const grid = renderGrid(ctx.tail.startRow, ctx.tail.columnLetters, ctx.tail.rows);
+    const text = `\nLast rows of the sheet (rows ${ctx.tail.startRow}–${ctx.tail.startRow + ctx.tail.rows.length - 1}):\n${grid}`;
+    if (used + estimateTokens(text) <= budgetTokens) {
+      sections.push(text);
+      used += estimateTokens(text);
     }
   }
 

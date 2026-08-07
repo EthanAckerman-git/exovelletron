@@ -175,7 +175,7 @@ describe("local server", () => {
     for (const attack of ["/vendor/../../../../etc/passwd", "/app/../../package.json", "/assets/%2e%2e/%2e%2e/package.json"]) {
       const res = await call(port, attack);
       expect([403, 404], `${attack} returned ${res.status}`).toContain(res.status);
-      expect(res.text).not.toContain("excel-ai-local");
+      expect(res.text).not.toContain("exovelletron");
     }
   });
 

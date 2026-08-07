@@ -102,6 +102,40 @@ function buildGrid(action) {
   return wrap;
 }
 
+/** One result row as a single readable line: split fields are joined with a separator. */
+const formatSampleRow = (value) =>
+  (Array.isArray(value) ? value.map((v) => v || "—").join("  ·  ") : value) || "(blank)";
+
+/**
+ * A whole-column rewrite has no preview grid to show up front: the results do not exist
+ * until the job runs. So the card states exactly what will happen, then fills in real
+ * output as rows complete.
+ */
+function buildTransformBody(action) {
+  const wrap = el("div");
+  wrap.appendChild(el("div", "proposal__summary", action.summary));
+
+  const instruction = el("div", "proposal__instruction");
+  instruction.appendChild(el("span", "eyebrow", action.columns ? "New columns" : "Rule applied to every row"));
+  if (action.columns) instruction.appendChild(el("p", "mono", action.columns.join("  ·  ")));
+  instruction.appendChild(el("p", null, action.instruction));
+  wrap.appendChild(instruction);
+
+  const progress = el("div", "transform__progress");
+  progress.hidden = true;
+  const bar = el("div", "progress");
+  bar.appendChild(el("i"));
+  const label = el("div", "transform__count mono", "");
+  progress.append(bar, label);
+  wrap.appendChild(progress);
+
+  const sample = el("div", "transform__sample");
+  sample.hidden = true;
+  wrap.appendChild(sample);
+
+  return { wrap, progress, bar: bar.firstChild, label, sample };
+}
+
 /** Compact property list for actions that change appearance or structure, not content. */
 function buildDetails(action) {
   const list = el("div", "proposal__summary");
@@ -131,15 +165,26 @@ export function buildProposal(action, handlers) {
   head.appendChild(addr);
   card.appendChild(head);
 
+  const isTransform = action.type === "transform_column" || action.type === "split_column";
   const showsGrid = action.type === "write_formula" || action.type === "write_values";
-  card.appendChild(showsGrid ? el("div", "proposal__summary", action.summary) : buildDetails(action));
-  if (showsGrid) card.appendChild(buildGrid(action));
+
+  let transform = null;
+  if (isTransform) {
+    transform = buildTransformBody(action);
+    card.appendChild(transform.wrap);
+  } else {
+    card.appendChild(showsGrid ? el("div", "proposal__summary", action.summary) : buildDetails(action));
+    if (showsGrid) card.appendChild(buildGrid(action));
+  }
 
   const actions = el("div", "proposal__actions");
-  const apply = el("button", "btn btn--primary", "Apply");
+  const apply = el("button", "btn btn--primary", isTransform ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows` : "Apply");
   const dismiss = el("button", "btn btn--quiet", "Dismiss");
   actions.append(apply, dismiss);
   card.appendChild(actions);
+
+  /** Set while a long transform is running so Dismiss can act as Stop. */
+  let cancelRunningJob = null;
 
   const finish = (label, undo) => {
     card.dataset.status = "applied";
@@ -172,14 +217,82 @@ export function buildProposal(action, handlers) {
   apply.addEventListener("click", async () => {
     apply.disabled = true;
     dismiss.disabled = true;
-    apply.textContent = "Applying…";
+    apply.textContent = isTransform ? "Working…" : "Applying…";
+    // Clear any failure from a previous attempt; leaving it up next to a success
+    // receipt tells the user two contradictory things at once.
+    card.querySelector(".proposal__error")?.remove();
+
+    // A column rewrite runs for minutes, so it reports progress and can be stopped.
+    if (isTransform) {
+      transform.progress.hidden = false;
+      dismiss.disabled = false;
+      dismiss.textContent = "Stop";
+      dismiss.dataset.mode = "stop";
+    }
+
     try {
-      const { undo } = await handlers.onApply(action);
+      const { undo, failed, results, lossy } = await handlers.onApply(action, {
+        onCancelHandle: (fn) => { cancelRunningJob = fn; },
+        onPhase: (phase) => {
+          if (!isTransform) return;
+          transform.label.textContent =
+            phase === "reading" ? "Reading the column…" : phase === "writing" ? "Writing results…" : "Starting…";
+        },
+        onProgress: ({ done, total, sample }) => {
+          if (!isTransform) return;
+          transform.bar.style.width = `${Math.max(2, (done / total) * 100).toFixed(1)}%`;
+          transform.label.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} rows`;
+          if (sample?.length) {
+            transform.sample.hidden = false;
+            transform.sample.textContent = "";
+            transform.sample.appendChild(el("span", "eyebrow", "First results"));
+            for (const value of sample.slice(0, 4)) {
+              transform.sample.appendChild(el("div", "transform__row mono", formatSampleRow(value)));
+            }
+          }
+        },
+      });
+
+      if (isTransform) {
+        transform.progress.hidden = true;
+        delete dismiss.dataset.mode;
+        if (results?.length) {
+          transform.sample.hidden = false;
+          transform.sample.textContent = "";
+          transform.sample.appendChild(el("span", "eyebrow", "Result"));
+          for (const value of results.slice(0, 4)) {
+            transform.sample.appendChild(el("div", "transform__row mono", formatSampleRow(value)));
+          }
+          if (results.length > 4) {
+            transform.sample.appendChild(el("div", "grid__more", `+ ${(results.length - 4).toLocaleString()} more rows`));
+          }
+        }
+        if (lossy?.length) {
+          const rows = lossy.slice(0, 5).map((i) => i + (action.rows ? 0 : 0));
+          const warn = el("div", "proposal__warning");
+          warn.appendChild(el("span", "eyebrow", "Check these rows"));
+          warn.appendChild(el("p", null,
+            `${lossy.length} row${lossy.length === 1 ? "" : "s"} lost some of the original text — the columns chosen ` +
+            `may not cover everything in the source. Undo and ask for more columns if so.`));
+          card.appendChild(warn);
+        }
+        if (failed?.length) {
+          const warn = el("div", "proposal__summary", `${failed.length} row${failed.length === 1 ? "" : "s"} could not be transformed and were left unchanged.`);
+          warn.style.color = "var(--amber)";
+          card.appendChild(warn);
+        }
+      }
+
       finish("Applied", undo);
     } catch (err) {
+      if (isTransform) {
+        transform.progress.hidden = true;
+        delete dismiss.dataset.mode;
+        dismiss.textContent = "Dismiss";
+      }
       apply.disabled = false;
       dismiss.disabled = false;
-      apply.textContent = "Apply";
+      apply.textContent = isTransform ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows` : "Apply";
       const error = card.querySelector(".proposal__error") ?? el("div", "proposal__summary proposal__error");
       error.textContent = `Could not apply: ${err.message}`;
       error.style.color = "var(--danger)";
@@ -188,6 +301,12 @@ export function buildProposal(action, handlers) {
   });
 
   dismiss.addEventListener("click", () => {
+    if (dismiss.dataset.mode === "stop") {
+      cancelRunningJob?.();
+      dismiss.disabled = true;
+      dismiss.textContent = "Stopping…";
+      return;
+    }
     handlers.onDismiss?.(action);
     finish("Dismissed", null);
   });

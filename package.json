@@ -1,11 +1,11 @@
 {
-  "name": "excel-ai-local",
-  "productName": "Excel AI Local",
+  "name": "exovelletron",
+  "productName": "Exovelletron",
   "version": "1.0.0",
   "description": "Fully offline AI assistant for Microsoft Excel. Your data never leaves your Mac.",
   "type": "module",
   "main": "desktop/main.js",
-  "author": "Excel AI Local",
+  "author": "Exovelletron",
   "license": "MIT",
   "private": true,
   "engines": {
@@ -32,8 +32,8 @@
     "vitest": "^3.0.0"
   },
   "build": {
-    "appId": "com.excelailocal.app",
-    "productName": "Excel AI Local",
+    "appId": "com.exovelletron.app",
+    "productName": "Exovelletron",
     "directories": {
       "output": "release",
       "buildResources": "assets"
@@ -63,7 +63,7 @@
       }
     },
     "dmg": {
-      "title": "Excel AI Local",
+      "title": "Exovelletron",
       "contents": [
         { "x": 140, "y": 200, "type": "file" },
         { "x": 400, "y": 200, "type": "link", "path": "/Applications" }

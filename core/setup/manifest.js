@@ -10,7 +10,16 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { paths as defaultPaths, ADDIN_ID, APP_NAME } from "../config.js";
 
-export const MANIFEST_FILENAME = "excel-ai-local.manifest.xml";
+export const MANIFEST_FILENAME = "exovelletron.manifest.xml";
+
+/** Filenames earlier versions used; removed on install so Excel never lists duplicates. */
+export const LEGACY_MANIFEST_FILENAMES = ["excel-ai-local.manifest.xml"];
+
+async function removeLegacyManifests(dir) {
+  await Promise.all(
+    LEGACY_MANIFEST_FILENAMES.map((name) => rm(path.join(dir, name), { force: true }).catch(() => {})),
+  );
+}
 
 const escapeXml = (s) =>
   String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c]);
@@ -71,14 +80,14 @@ export function buildManifest(port) {
           <FunctionFile resid="Commands.Url"/>
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
             <OfficeTab id="TabHome">
-              <Group id="ExcelAiLocal.Group">
+              <Group id="Exovelletron.Group">
                 <Label resid="Group.Label"/>
                 <Icon>
                   <bt:Image size="16" resid="Icon.16"/>
                   <bt:Image size="32" resid="Icon.32"/>
                   <bt:Image size="80" resid="Icon.80"/>
                 </Icon>
-                <Control xsi:type="Button" id="ExcelAiLocal.OpenPane">
+                <Control xsi:type="Button" id="Exovelletron.OpenPane">
                   <Label resid="Button.Label"/>
                   <Supertip>
                     <Title resid="Button.Label"/>
@@ -90,7 +99,7 @@ export function buildManifest(port) {
                     <bt:Image size="80" resid="Icon.80"/>
                   </Icon>
                   <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>ExcelAiLocalPane</TaskpaneId>
+                    <TaskpaneId>ExovelletronPane</TaskpaneId>
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
@@ -154,7 +163,7 @@ export class AddinAccessError extends Error {
   constructor(targetPath) {
     super(
       "macOS is blocking access to Excel's add-ins folder. " +
-      "Excel AI Local needs Full Disk Access to install the add-in there.",
+      "Exovelletron needs Full Disk Access to install the add-in there.",
     );
     this.name = "AddinAccessError";
     this.code = "TCC_DENIED";
@@ -170,6 +179,7 @@ export async function installManifest(port, p = defaultPaths) {
   const file = manifestPath(p);
   try {
     await mkdir(p.wefDir, { recursive: true });
+    await removeLegacyManifests(p.wefDir);
     await writeFile(file, buildManifest(port), "utf8");
   } catch (err) {
     if (isPermissionError(err)) throw new AddinAccessError(p.wefDir);
@@ -214,6 +224,7 @@ export async function installManifestAtChosenDir(chosenDir, port, p = defaultPat
   }
 
   await mkdir(target, { recursive: true });
+  await removeLegacyManifests(target);
   const file = path.join(target, MANIFEST_FILENAME);
   await writeFile(file, buildManifest(port), "utf8");
   return file;

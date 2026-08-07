@@ -4,7 +4,7 @@ import { normalizeConfig, DEFAULTS, createPaths } from "../../core/config.js";
 import { buildManifest } from "../../core/setup/manifest.js";
 import { resolveWithinRoot, contentTypeFor } from "../../core/server/static.js";
 import { tokensMatch, isAllowedOrigin, authorizeApiRequest, mintToken, securityHeaders, TOKEN_HEADER } from "../../core/server/security.js";
-import { CATALOG, getModel, downloadUrl, formatBytes, fitForMachine, DEFAULT_MODEL_ID } from "../../core/models/catalog.js";
+import { CATALOG, getModel, downloadUrl, formatBytes, fitForMachine, estimateMemoryBytes, DEFAULT_MODEL_ID } from "../../core/models/catalog.js";
 import { renderSheetContext, buildUserTurn, estimateTokens } from "../../core/llm/prompt.js";
 import { isBenignBackendNoise } from "../../core/llm/engine.js";
 
@@ -35,7 +35,7 @@ describe("config", () => {
 
   it("derives every path from the supplied home directory", () => {
     const p = createPaths("/tmp/fakehome");
-    expect(p.dataDir).toBe("/tmp/fakehome/Library/Application Support/Excel AI Local");
+    expect(p.dataDir).toBe("/tmp/fakehome/Library/Application Support/Exovelletron");
     expect(p.wefDir).toContain("com.microsoft.Excel");
     for (const key of ["certsDir", "modelsDir", "configFile", "logFile"]) {
       expect(p[key].startsWith("/tmp/fakehome")).toBe(true);
@@ -202,11 +202,39 @@ describe("model catalog", () => {
     expect(formatBytes(-5)).toBe("0 B");
   });
 
-  it("grades fit against available RAM", () => {
+  it("estimates memory as weights plus overhead and KV cache", () => {
+    const m = getModel("qwen3.5-4b");
+    const need = estimateMemoryBytes(m, 8192);
+    // Always more than the weights, never wildly more.
+    expect(need).toBeGreaterThan(m.bytes);
+    expect(need).toBeLessThan(m.bytes * 1.5 + 1e9);
+    // A bigger context window costs more memory.
+    expect(estimateMemoryBytes(m, 32768)).toBeGreaterThan(need);
+  });
+
+  it("grades fit against memory actually usable, not installed RAM", () => {
     const m = getModel("qwen3.5-9b");
-    expect(fitForMachine(m, 32).level).toBe("great");
-    expect(fitForMachine(m, 16).level).toBe("ok");
-    expect(fitForMachine(m, 8).level).toBe("tight");
+    const need = estimateMemoryBytes(m, 8192);
+
+    expect(fitForMachine(m, { availableBytes: need * 3 }).level).toBe("great");
+    expect(fitForMachine(m, { availableBytes: need / 0.7 }).level).toBe("ok");
+    expect(fitForMachine(m, { availableBytes: need / 0.95 }).level).toBe("tight");
+    expect(fitForMachine(m, { availableBytes: need * 0.5 }).level).toBe("too-big");
+  });
+
+  it("quotes real numbers rather than a vague promise", () => {
+    // Regression: the label used to claim "Runs great on this Mac" from a bare RAM
+    // comparison, with no relationship to what the model actually needs.
+    const fit = fitForMachine(getModel("qwen3.5-4b"), { availableBytes: 19.1e9 });
+    expect(fit.label).toMatch(/GB usable/);
+    expect(fit.label).toMatch(/~\d+\.\d GB/);
+    expect(fit.needBytes).toBeGreaterThan(0);
+  });
+
+  it("says what it needs when memory is unknown", () => {
+    const fit = fitForMachine(getModel("qwen3.5-2b"), { availableBytes: 0 });
+    expect(fit.level).toBe("unknown");
+    expect(fit.label).toMatch(/Needs about/);
   });
 });
 

@@ -108,6 +108,76 @@ describe("validateAction: write_formula", () => {
   });
 });
 
+describe("validateAction: split_column", () => {
+  const base = { source: "A2:A21", target: "B2", columns: ["Name", "Street", "City", "State", "ZIP"], instruction: "Pull the fields out of each CSV line." };
+
+  it("builds a grid target from the column list", () => {
+    const r = validateAction("split_column", base);
+    expect(r.ok).toBe(true);
+    expect(r.action).toMatchObject({ source: "A2:A21", address: "B2:F21", rows: 20 });
+    expect(r.action.columns).toHaveLength(5);
+  });
+
+  it("puts the headers in the row above the data", () => {
+    expect(validateAction("split_column", base).action.headerAddress).toBe("B1:F1");
+  });
+
+  it("omits headers when there is no room above", () => {
+    const r = validateAction("split_column", { ...base, source: "A1:A5", target: "B1" });
+    expect(r.action.headerAddress).toBeNull();
+  });
+
+  // Writing over the column being read would destroy the input halfway through.
+  it("refuses a target that overlaps the source column", () => {
+    expect(validateAction("split_column", { ...base, target: "A2" }))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/overwrite the source column A/) });
+  });
+
+  it("needs at least two output columns", () => {
+    expect(validateAction("split_column", { ...base, columns: ["Everything"] }))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/at least two/) });
+  });
+
+  it("drops blank column names before counting", () => {
+    expect(validateAction("split_column", { ...base, columns: ["Name", "  ", "City"] }).action.columns)
+      .toEqual(["Name", "City"]);
+  });
+
+  it("trims a source that runs past the data", () => {
+    const r = validateAction("split_column", { ...base, source: "A2:A1000" }, { lastRow: 21 });
+    expect(r.action.source).toBe("A2:A21");
+    expect(r.action.clamped).toBe(true);
+  });
+
+  it("refuses a job that would write more cells than the budget", () => {
+    const r = validateAction("split_column", { ...base, source: "A2:A5000", columns: new Array(20).fill("c").map((c, i) => c + i) });
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("limit is") });
+  });
+
+  it("requires a real instruction", () => {
+    expect(validateAction("split_column", { ...base, instruction: "split" }).ok).toBe(false);
+  });
+});
+
+describe("validateAction: transform_column", () => {
+  const base = { source: "B2:B500", target: "C2", instruction: "Standardise this address to USPS format." };
+
+  it("accepts a whole-column rewrite", () => {
+    const r = validateAction("split_column", { ...base, columns: ["a", "b"] });
+    expect(r.ok).toBe(true);
+  });
+
+  it("rewrites in place when source and target match", () => {
+    const r = validateAction("transform_column", { source: "B2:B10", target: "B2:B10", instruction: "Uppercase every value." });
+    expect(r.action.inPlace).toBe(true);
+    expect(r.action.rows).toBe(9);
+  });
+
+  it("works on a single column only", () => {
+    expect(validateAction("transform_column", { ...base, source: "A2:C9" }).ok).toBe(false);
+  });
+});
+
 describe("lastRowOf", () => {
   it("reads the final row from a used range", () => {
     expect(lastRowOf({ usedRange: { address: "A1:E501" } })).toBe(501);
@@ -192,6 +262,24 @@ describe("validateAction: insert_column", () => {
 
   it("rejects a non-letter", () => {
     expect(validateAction("insert_column", { before: "3" }).ok).toBe(false);
+  });
+});
+
+describe("apply coverage", () => {
+  // Regression: split_column was added to the tool list but not to the task pane's
+  // routing table, so the model proposed it and applying failed with
+  // "Cannot apply unsupported action".
+  it("every action the model can propose has an apply path", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const [applySource, mainSource] = await Promise.all([
+      readFile(new URL("../../taskpane/sheet/apply.js", import.meta.url), "utf8"),
+      readFile(new URL("../../taskpane/main.js", import.meta.url), "utf8"),
+    ]);
+
+    for (const name of ACTION_NAMES) {
+      const handled = applySource.includes(`case "${name}"`) || mainSource.includes(`"${name}"`);
+      expect(handled, `${name} has no apply path`).toBe(true);
+    }
   });
 });
 

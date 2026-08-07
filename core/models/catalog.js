@@ -77,12 +77,50 @@ export function formatBytes(bytes) {
 }
 
 /**
- * Fit assessment for the machine we are running on, used to steer the picker.
- * @param {ModelSpec} model
- * @param {number} totalRamGb
+ * Roughly what the model will occupy once resident: the weights, plus compute buffers
+ * and the KV cache for the context window.
+ *
+ * Deliberately an estimate, and labelled as one wherever it is shown. The weights are
+ * exact (the file size); the ~20% and the per-token KV term are fitted to what Qwen3.5
+ * actually consumes at these sizes rather than derived from the architecture, because
+ * the layer and head counts are not in the catalog.
  */
-export function fitForMachine(model, totalRamGb) {
-  if (totalRamGb >= model.recommendedRamGb) return { level: "great", label: "Runs great on this Mac" };
-  if (totalRamGb >= model.minRamGb) return { level: "ok", label: "Runs on this Mac" };
-  return { level: "tight", label: `Needs ${model.minRamGb} GB of RAM` };
+export function estimateMemoryBytes(model, contextTokens = 8192) {
+  const weights = model.bytes;
+  const overhead = weights * 0.2;
+  const kvCache = contextTokens * 48_000;
+  return Math.round(weights + overhead + kvCache);
+}
+
+/**
+ * How well a model fits the memory actually available to it.
+ *
+ * Compares against the GPU's usable working set rather than total installed RAM: on
+ * Apple Silicon those differ substantially (roughly 19 GB of a 24 GB machine), and total
+ * RAM would cheerfully promise that a model "runs great" when it would in fact spill.
+ *
+ * @param {ModelSpec} model
+ * @param {{availableBytes:number, contextTokens?:number}} machine
+ */
+export function fitForMachine(model, machine) {
+  // Older callers passed a plain GB number; keep them working.
+  const available = typeof machine === "number"
+    ? machine * 1024 ** 3
+    : machine?.availableBytes ?? 0;
+  const contextTokens = typeof machine === "object" ? machine?.contextTokens ?? 8192 : 8192;
+
+  const need = estimateMemoryBytes(model, contextTokens);
+  const needGb = need / 1e9;
+
+  if (!available) {
+    return { level: "unknown", label: `Needs about ${needGb.toFixed(1)} GB`, needBytes: need };
+  }
+
+  const headroom = need / available;
+  const detail = `~${needGb.toFixed(1)} GB of ${(available / 1e9).toFixed(1)} GB usable`;
+
+  if (headroom > 1) return { level: "too-big", label: `Too large — ${detail}`, needBytes: need };
+  if (headroom > 0.85) return { level: "tight", label: `Tight — ${detail}`, needBytes: need };
+  if (headroom > 0.6) return { level: "ok", label: `Fits — ${detail}`, needBytes: need };
+  return { level: "great", label: `Plenty of room — ${detail}`, needBytes: need };
 }

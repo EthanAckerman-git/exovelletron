@@ -78,6 +78,32 @@ export class Engine extends EventEmitter {
     };
   }
 
+  /**
+   * Memory actually available to the model, from the GPU backend rather than os.totalmem.
+   * On Apple Silicon the usable working set is well below installed RAM, and quoting
+   * installed RAM would overpromise how large a model fits.
+   */
+  async memoryInfo() {
+    try {
+      const mod = await this.#llamaModule();
+      if (!this.#llama) {
+        this.#llama = await mod.getLlama({
+          logLevel: mod.LlamaLogLevel?.warn ?? undefined,
+          logger: (level, message) => {
+            if (isBenignBackendNoise(message)) return;
+            this.emit("log", { level, message });
+          },
+        });
+      }
+      const vram = await this.#llama.getVramState();
+      // While a model is resident its own weights show as used; the honest figure for
+      // "could another model fit" is free plus whatever this one already holds.
+      return { total: vram.total, free: vram.free, used: vram.used };
+    } catch {
+      return { total: os.totalmem(), free: os.freemem(), used: 0 };
+    }
+  }
+
   updateConfig(patch) {
     this.#config = { ...this.#config, ...patch };
   }
@@ -186,6 +212,106 @@ export class Engine extends EventEmitter {
   async resetConversation() {
     if (!this.#session) return;
     await this.#session.resetChatHistory();
+  }
+
+  /**
+   * Re-prime the model with a saved transcript so a reopened conversation can be
+   * continued rather than merely read.
+   *
+   * Only the plain user/assistant turns are replayed. Tool calls are deliberately left
+   * out: their results referred to a workbook state that no longer exists, and replaying
+   * them would invite the model to believe changes are still pending.
+   */
+  async restoreConversation(messages = []) {
+    if (!this.#session) return;
+    const history = [{ type: "system", text: SYSTEM_PROMPT }];
+    for (const message of messages) {
+      if (message.role === "user" && message.text?.trim()) {
+        history.push({ type: "user", text: message.text });
+      } else if (message.role === "assistant" && message.text?.trim()) {
+        history.push({ type: "model", response: [message.text] });
+      }
+    }
+    this.#session.setChatHistory(history);
+  }
+
+  /**
+   * Run a row-by-row transformation over a column of values.
+   *
+   * This gets its own short-lived context rather than sharing the chat session: the
+   * batches would otherwise fill the conversation with hundreds of rows of intermediate
+   * data, and the memory is better released as soon as the job finishes.
+   *
+   * @param {object} opts
+   * @param {string[]} opts.values
+   * @param {string} opts.instruction
+   * @param {(p:{done:number,total:number,sample:string[]}) => void} [opts.onProgress]
+   * @param {AbortSignal} [opts.signal]
+   */
+  async transform({ values, instruction, fields = null, onProgress, signal }) {
+    if (this.#state !== "ready" || !this.#model) throw new Error("No model is loaded.");
+    if (this.isBusy) throw new Error("The model is busy answering a message.");
+
+    const mod = await this.#llamaModule();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    this.#generation = { controller };
+    this.#setState("generating");
+
+    let context = null;
+
+    try {
+      context = await this.#model.createContext({ contextSize: 4096 });
+      const session = new mod.LlamaChatSession({
+        contextSequence: context.getSequence(),
+        systemPrompt:
+          "You transform spreadsheet values. You return only the transformed values, as JSON, " +
+          "in the same order and the same number as the inputs. You never add commentary.",
+        // A split needs room for several fields per row.
+        ...this.#chatWrapperFor(this.#modelId, mod),
+      });
+
+      const complete = async (prompt, schema) => {
+        const grammar = await this.#llama.createGrammarForJsonSchema(schema);
+        // Each batch is independent; resetting stops earlier rows steering later ones.
+        await session.resetChatHistory();
+        const raw = await session.prompt(prompt, {
+          grammar,
+          temperature: 0,
+          maxTokens: 3072,
+          signal: controller.signal,
+          stopOnAbortSignal: true,
+          budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
+        });
+        return grammar.parse(raw);
+      };
+
+      const { transformValues, findLossyRows } = await import("./transform.js");
+      const result = await transformValues({
+        values,
+        instruction,
+        fields,
+        complete,
+        signal: controller.signal,
+        // Surface the first few finished rows so the pane can show real output while
+        // a long job is still running.
+        onProgress: ({ done, total, results }) => {
+          onProgress?.({ done, total, sample: results.filter((v) => v != null).slice(0, 5) });
+        },
+      });
+
+      // A split that drops content leaves a plausible-looking sheet, so say so loudly.
+      return fields?.length
+        ? { ...result, lossy: findLossyRows(values, result.results) }
+        : result;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      try { await context?.dispose?.(); } catch { /* already gone */ }
+      this.#generation = null;
+      if (this.#state === "generating") this.#setState("ready");
+    }
   }
 
   abort() {

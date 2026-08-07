@@ -7,11 +7,19 @@
  * window out of it.
  */
 
-/** Hard ceilings on what we will pull across the bridge, regardless of sheet size. */
+/**
+ * Hard ceilings on what we will pull across the bridge, regardless of sheet size.
+ *
+ * `tailRows` matters more than its size suggests: showing only the first rows of a
+ * 40,000-row sheet leaves the model guessing whether the data continues in the same
+ * shape. Sampling the end as well makes the scale concrete and catches the common case
+ * where later rows are formatted differently from the first screenful.
+ */
 export const LIMITS = {
-  sampleRows: 40,
+  sampleRows: 60,
+  tailRows: 15,
   columns: 40,
-  selectionRows: 30,
+  selectionRows: 40,
   formulaProbeRows: 12,
 };
 
@@ -93,6 +101,17 @@ export async function readSheetContext() {
     const window = sheet.getRangeByIndexes(startRow, startCol, windowRows, colCount);
     window.load(["values"]);
 
+    // When the sheet runs past the head window, also read the last few rows so the model
+    // can see how the data actually ends rather than extrapolating from the top.
+    let tail = null;
+    let tailStartRow = 0;
+    const tailCount = Math.min(LIMITS.tailRows, used.rowCount - windowRows);
+    if (tailCount > 0) {
+      tailStartRow = startRow + used.rowCount - tailCount;
+      tail = sheet.getRangeByIndexes(tailStartRow, startCol, tailCount, colCount);
+      tail.load(["values"]);
+    }
+
     // Probe a few cells for existing formulas so the model can respect them.
     const probeRows = Math.min(used.rowCount, LIMITS.formulaProbeRows);
     const probe = sheet.getRangeByIndexes(startRow, startCol, probeRows, colCount);
@@ -115,6 +134,14 @@ export async function readSheetContext() {
       result.sample = { startRow: startRow + 2, columnLetters: result.columnLetters, rows: rows.slice(1) };
     } else {
       result.sample = { startRow: startRow + 1, columnLetters: result.columnLetters, rows };
+    }
+
+    if (tail) {
+      result.tail = {
+        startRow: tailStartRow + 1,
+        columnLetters: result.columnLetters,
+        rows: tail.values.map((r) => r.map(plain)),
+      };
     }
 
     for (let r = 0; r < probe.formulas.length; r++) {

@@ -65,7 +65,7 @@ async function main() {
   // no-op module instead of Microsoft's real sink: it satisfies the loader while making
   // it structurally impossible for the runtime to emit telemetry, online or off.
   await mkdir(path.join(OUT, "telemetry"), { recursive: true });
-  const stub = `/* Excel AI Local: telemetry sink intentionally stubbed out. No data is collected. */
+  const stub = `/* Exovelletron: telemetry sink intentionally stubbed out. No data is collected. */
 (function () {
   var noop = function () {};
   var sink = { sendTelemetryEvent: noop, writeEvent: noop, flush: noop, addSink: noop, setSink: noop };

@@ -15,7 +15,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const BUILD_DIR = path.join(os.homedir(), "Library", "Caches", "ExcelAILocalBuild", "release");
+const BUILD_DIR = path.join(os.homedir(), "Library", "Caches", "ExovelletronBuild", "release");
 const LOCAL_RELEASE = path.join(ROOT, "release");
 
 rmSync(BUILD_DIR, { recursive: true, force: true });
@@ -36,7 +36,7 @@ for (const file of readdirSync(BUILD_DIR)) {
   console.log(`\n  ${file} -> release/${file}`);
 }
 
-const appPath = path.join(BUILD_DIR, "mac-arm64", "Excel AI Local.app");
+const appPath = path.join(BUILD_DIR, "mac-arm64", "Exovelletron.app");
 if (existsSync(appPath)) console.log(`  app bundle: ${appPath}`);
 if (!copied) {
   console.error("No DMG was produced.");

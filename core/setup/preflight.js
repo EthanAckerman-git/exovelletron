@@ -75,7 +75,7 @@ export async function preflight({ paths, port, modelId }) {
       id: STEP.ADDIN,
       title: "Excel add-in",
       detail: manifest
-        ? "Installed. Look for Excel AI Local on the Home tab."
+        ? "Installed. Look for Exovelletron on the Home tab."
         : access === "blocked"
           ? "macOS keeps Excel's add-in folder sealed off from other apps, so this last step needs one drag from you. It takes about ten seconds and you only do it once."
           : "Registers the add-in with Excel so it appears on the Home tab.",

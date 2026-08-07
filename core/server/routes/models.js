@@ -4,7 +4,13 @@ import { sseFrame } from "./chat.js";
 
 export function registerModelRoutes(routes, { engine, models, json, readJsonBody }) {
   routes.set("GET /api/models", async (_req, res) => {
-    json(res, 200, { models: await models.list(), activeId: engine.modelId, downloadingId: models.activeDownloadId });
+    const memory = await engine.memoryInfo();
+    json(res, 200, {
+      models: await models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens }),
+      activeId: engine.modelId,
+      downloadingId: models.activeDownloadId,
+      memory,
+    });
   });
 
   /** Live download progress. Kept separate from the chat stream so either can run alone. */

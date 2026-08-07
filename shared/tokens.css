@@ -135,6 +135,13 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * The `hidden` attribute only hides via a UA `display: none`, which any explicit
+ * `display` rule silently beats. Several panels here are flex containers, so without
+ * this they render permanently visible no matter what the JS sets.
+ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;

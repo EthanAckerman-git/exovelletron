@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task pane debug harness</title>
+<link rel="stylesheet" href="/app/taskpane.css">
+<style>
+  body { background: #6b6b76; }
+  .stage { display: flex; gap: 20px; padding: 16px; align-items: flex-start; }
+  .pane { width: 380px; height: 900px; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 40px rgb(0 0 0 / 35%); }
+</style>
+</head>
+<body>
+<!--
+  Runs the real task pane outside Excel by stubbing the two things it depends on:
+  the Office host and the local API. Development only; never referenced by the manifest.
+-->
+<script>
+  window.__EAL_TOKEN__ = "debug-token";
+
+  const CONVERSATIONS = new URLSearchParams(location.search).get("empty") === "1" ? [] : [
+    { id: "11111111-1111-4111-8111-111111111111", title: "Fill the Revenue column with units times unit price", updatedAt: Date.now() - 120000, messageCount: 4 },
+    { id: "22222222-2222-4222-8222-222222222222", title: "Standardise every address to USPS format", updatedAt: Date.now() - 7200000, messageCount: 6 },
+    { id: "33333333-3333-4333-8333-333333333333", title: "Find blanks and duplicates in this data", updatedAt: Date.now() - 400000000, messageCount: 2 },
+  ];
+
+  const json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  const realFetch = window.fetch.bind(window);
+
+  window.fetch = async (url, options = {}) => {
+    const path = String(url);
+    // Only the API is stubbed; real assets still come off the server.
+    if (!path.includes("/api/")) return realFetch(url, options);
+    if (path.includes("/api/status")) {
+      return json({ ok: true, version: "debug", engine: { state: "ready", modelId: "qwen3.5-4b", contextTokens: 8192 },
+        model: { id: "qwen3.5-4b", name: "Qwen3.5 4B", params: "4B" }, machine: { totalRamGb: 24 } });
+    }
+    if (path.includes("/api/conversations/detail")) {
+      return json({ conversation: { id: "11111111-1111-4111-8111-111111111111", title: "Restored", messages: [
+        { id: "m1", role: "user", text: "Fill the Revenue column with units times unit price.", at: Date.now() },
+        { id: "m2", role: "assistant", text: "Filled it with `=C2*D2`.", at: Date.now(),
+          actions: [{ type: "write_formula", address: "E2:E6", summary: "Fill 5 cells in Sheet1!E2:E6", status: "applied" }] },
+      ] } });
+    }
+    if (path.includes("/api/conversations")) return json({ conversations: CONVERSATIONS });
+    if (path.includes("/api/models/events")) return new Response(new ReadableStream({ start() {} }));
+    return json({ ok: true });
+  };
+
+  // Minimal Office/Excel surface: enough for the pane to boot and read a selection.
+  window.Office = {
+    HostType: { Excel: "Excel" },
+    EventType: { DocumentSelectionChanged: "sel" },
+    context: {
+      officeTheme: { bodyBackgroundColor: "#1c1b22" },
+      document: { addHandlerAsync: () => {} },
+      requirements: { isSetSupported: () => true },
+    },
+    onReady: (cb) => cb({ host: "Excel" }),
+  };
+
+  window.Excel = {
+    run: async (fn) => fn({
+      workbook: {
+        name: "Debug.xlsx",
+        load: () => {},
+        worksheets: {
+          getActiveWorksheet: () => ({
+            name: "Sheet1", load: () => {},
+            getUsedRangeOrNullObject: () => ({
+              load: () => {}, isNullObject: false, address: "Sheet1!A1:E6",
+              rowCount: 6, columnCount: 5, rowIndex: 0, columnIndex: 0,
+            }),
+            getRangeByIndexes: () => ({ load: () => {}, values: [["Region", "Rep"]], formulas: [[""]] }),
+          }),
+          load: () => {}, items: [{ name: "Sheet1" }],
+        },
+        getSelectedRange: () => ({
+          load: () => {}, address: "Sheet1!E2:E6",
+          rowCount: 5, columnCount: 1, cellCount: 5, rowIndex: 1, columnIndex: 4,
+        }),
+      },
+      sync: async () => {},
+    }),
+  };
+</script>
+
+<div class="stage">
+  <div class="pane" id="paneHost"></div>
+</div>
+
+<script type="module">
+  // The pane markup, inlined so the harness needs no server-side templating.
+  const res = await fetch("/app/debug-pane.html").catch(() => null);
+  document.getElementById("paneHost").innerHTML = res && res.ok ? await res.text() : "";
+  await import("/app/taskpane.js");
+</script>
+</body>
+</html>

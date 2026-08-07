@@ -16,6 +16,7 @@ import { installManifest, isManifestInstalled, manifestPath, exportManifest, ins
 import { preflight } from "../core/setup/preflight.js";
 import { createAppServer } from "../core/server/server.js";
 import { ModelStore } from "../core/models/store.js";
+import { ConversationStore } from "../core/history/store.js";
 import { Engine } from "../core/llm/engine.js";
 import { getModel, DEFAULT_MODEL_ID } from "../core/models/catalog.js";
 
@@ -26,6 +27,7 @@ let tray = null;
 let server = null;
 let engine = null;
 let models = null;
+let history = null;
 let config = null;
 let activePort = DEFAULT_PORT;
 let serverError = null;
@@ -39,7 +41,7 @@ function createWindow() {
     minWidth: 620,
     minHeight: 520,
     show: false,
-    title: "Excel AI Local",
+    title: "Exovelletron",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#141318",
     webPreferences: {
@@ -77,7 +79,7 @@ function createTray() {
   const icon = nativeImage.createFromPath(path.join(DIR, "..", "assets", "trayTemplate.png"));
   icon.setTemplateImage(true);
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
-  tray.setToolTip("Excel AI Local");
+  tray.setToolTip("Exovelletron");
   refreshTrayMenu();
   tray.on("click", showWindow);
 }
@@ -98,7 +100,7 @@ function refreshTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label, enabled: false },
     { type: "separator" },
-    { label: "Open Excel AI Local", click: showWindow },
+    { label: "Open Exovelletron", click: showWindow },
     { label: "Open Microsoft Excel", click: () => shell.openPath("/Applications/Microsoft Excel.app") },
     { type: "separator" },
     { label: "Quit", click: () => app.quit() },
@@ -121,6 +123,7 @@ async function startServer() {
       port,
       engine,
       models,
+      history,
       appInfo: { version: app.getVersion() },
     });
     try {
@@ -169,13 +172,16 @@ function registerIpc() {
     engine: engine.status(),
     activeModelId: engine.modelId,
     config,
-    machine: { totalRamGb: Math.round(os.totalmem() / 1024 ** 3), arch: os.arch(), cpus: os.cpus().length },
+    machine: { totalRamGb: Math.round(os.totalmem() / 1024 ** 3), arch: os.arch(), cpus: os.cpus().length, memory: await engine.memoryInfo() },
     preflight: await preflight({ paths, port: activePort, modelId: config.modelId ?? DEFAULT_MODEL_ID }),
     manifestPath: manifestPath(paths),
     modelsDir: paths.modelsDir,
   }));
 
-  ipcMain.handle("models:list", () => models.list());
+  ipcMain.handle("models:list", async () => {
+    const memory = await engine.memoryInfo();
+    return models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens });
+  });
 
   ipcMain.handle("models:download", (_e, id) => {
     models.download(id).then(
@@ -236,7 +242,7 @@ function registerIpc() {
     const startAt = existsSync(paths.wefDir) ? paths.wefDir : path.dirname(paths.wefDir);
     const result = await dialog.showOpenDialog(win, {
       title: "Select Excel's add-in folder",
-      message: "Select the “wef” folder so Excel AI Local can install the add-in",
+      message: "Select the “wef” folder so Exovelletron can install the add-in",
       defaultPath: startAt,
       properties: ["openDirectory", "createDirectory"],
       buttonLabel: "Grant Access",
@@ -281,6 +287,7 @@ async function boot() {
   config = await loadConfig(paths);
 
   models = new ModelStore(paths.modelsDir);
+  history = new ConversationStore(paths.dataDir);
   engine = new Engine({
     config: {
       contextTokens: config.contextTokens,
@@ -305,7 +312,7 @@ async function boot() {
   } catch (err) {
     serverError = err.message;
     send("app:serverError", err.message);
-    dialog.showErrorBox("Excel AI Local could not start", err.message);
+    dialog.showErrorBox("Exovelletron could not start", err.message);
     // Note: manifest-permission failures never reach here — they are surfaced as a
     // setup step, not as a fatal startup error.
   }

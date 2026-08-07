@@ -10,8 +10,6 @@ import os from "node:os";
 import { CATALOG, getModel, fitForMachine } from "./catalog.js";
 import { downloadModel, deleteModel, isInstalled, modelFilePath, partFilePath } from "./downloader.js";
 
-const totalRamGb = () => Math.round(os.totalmem() / 1024 ** 3);
-
 export class ModelStore extends EventEmitter {
   #modelsDir;
   #active = null; // { id, controller, progress }
@@ -34,9 +32,12 @@ export class ModelStore extends EventEmitter {
     return model ? modelFilePath(this.#modelsDir, model) : null;
   }
 
-  /** Catalog entries decorated with on-disk state and machine fit. */
-  async list() {
-    const ram = totalRamGb();
+  /**
+   * Catalog entries decorated with on-disk state and machine fit.
+   * @param {{availableBytes?:number, contextTokens?:number}} [machine]
+   */
+  async list(machine = {}) {
+    const available = machine.availableBytes ?? os.totalmem();
     return Promise.all(
       CATALOG.map(async (model) => {
         const installed = await isInstalled(this.#modelsDir, model);
@@ -55,7 +56,7 @@ export class ModelStore extends EventEmitter {
           partialBytes,
           downloading: this.#active?.id === model.id,
           progress: active,
-          fit: fitForMachine(model, ram),
+          fit: fitForMachine(model, { availableBytes: available, contextTokens: machine.contextTokens }),
         };
       }),
     );

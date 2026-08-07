@@ -4,11 +4,12 @@
  * Every path is derived from a single `home` value so tests can point the whole
  * app at a temp directory instead of touching the real user's Library.
  */
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, rm, readdir, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const APP_NAME = "Excel AI Local";
+export const APP_NAME = "Exovelletron";
 export const ADDIN_ID = "b6f4a2c1-9d3e-4a7b-8c15-2e6f0a9d4b73";
 
 /**
@@ -79,9 +80,72 @@ export async function saveConfig(patch, p = paths) {
 }
 
 export async function ensureDirs(p = paths) {
+  await migrateLegacyDataDir(p);
   await Promise.all([
     mkdir(p.dataDir, { recursive: true }),
     mkdir(p.certsDir, { recursive: true }),
     mkdir(p.modelsDir, { recursive: true }),
   ]);
+}
+
+/** Application Support folders used by earlier names of this app. */
+export const LEGACY_APP_NAMES = ["Excel AI Local"];
+
+/** True for a directory containing nothing; a file is never "empty" for this purpose. */
+async function isEmptyDir(target) {
+  try {
+    if (!(await stat(target)).isDirectory()) return false;
+    return (await readdir(target)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The things worth carrying across a rename. Everything else is regenerated. */
+const MIGRATABLE = ["models", "conversations", "config.json"];
+
+/**
+ * Move data written under a previous app name into the current one.
+ *
+ * Without this, renaming the app silently orphans a multi-gigabyte model download and
+ * every saved conversation, and the user is asked to fetch it all again for no reason.
+ *
+ * Migrating item by item rather than renaming the whole folder is deliberate: Electron
+ * creates its own userData directory at the new path before any of our code runs, so the
+ * destination always exists by the time we get here and a directory rename would fail.
+ * Nothing is overwritten — an item already present at the destination wins.
+ *
+ * @returns {Promise<string[]>} the items that were moved
+ */
+export async function migrateLegacyDataDir(p = paths) {
+  const supportDir = path.dirname(p.dataDir);
+  const moved = [];
+
+  for (const legacy of LEGACY_APP_NAMES) {
+    const from = path.join(supportDir, legacy);
+    if (from === p.dataDir || !existsSync(from)) continue;
+
+    await mkdir(p.dataDir, { recursive: true });
+    for (const item of MIGRATABLE) {
+      const source = path.join(from, item);
+      const target = path.join(p.dataDir, item);
+      if (!existsSync(source)) continue;
+
+      // An empty destination directory is not real data — a previous launch will have
+      // created `models/` before anything was downloaded into it. Treating that as
+      // "already migrated" would strand the legacy copy forever.
+      if (existsSync(target)) {
+        if (!(await isEmptyDir(target))) continue;
+        await rm(target, { recursive: true, force: true });
+      }
+
+      try {
+        await rename(source, target);
+        moved.push(item);
+      } catch {
+        // Cross-device or permission failure just means that item starts fresh.
+      }
+    }
+  }
+  return moved;
 }

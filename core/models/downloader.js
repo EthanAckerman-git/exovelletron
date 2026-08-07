@@ -111,7 +111,7 @@ export async function downloadModel({ modelsDir, model, signal, onProgress, fetc
   if (received < model.bytes) {
     emit("downloading");
 
-    const headers = { "User-Agent": "ExcelAILocal/1.0" };
+    const headers = { "User-Agent": "Exovelletron/1.0" };
     if (received > 0) headers.Range = `bytes=${received}-`;
 
     const res = await fetchImpl(downloadUrl(model), { headers, signal, redirect: "follow" });

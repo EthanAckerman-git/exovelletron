@@ -179,6 +179,164 @@ export const ACTION_SPECS = {
     },
   },
 
+  transform_column: {
+    description:
+      "Rewrite every value in a column, row by row, using the whole column — not just the rows shown " +
+      "in the context. Use this when each row needs its own judgement that no formula can express: " +
+      "standardising postal addresses, splitting or reordering names, normalising inconsistent dates, " +
+      "categorising free text, cleaning up messy entries. Say precisely what to do to a single value in " +
+      "`instruction`; it is applied to each row independently.",
+    params: {
+      type: "object",
+      properties: {
+        source: { type: "string", description: 'Column range to read, e.g. "B2:B500".' },
+        target: {
+          type: "string",
+          description: 'Where to write the results, same height as source, e.g. "C2:C500". May equal source to rewrite in place.',
+        },
+        instruction: {
+          type: "string",
+          description:
+            'What to do to one value, e.g. "Standardise this US street address to USPS format: uppercase, ' +
+            'standard suffix abbreviations (STREET->ST, AVENUE->AVE), no punctuation."',
+        },
+        sheet: { type: "string" },
+      },
+      required: ["source", "target", "instruction"],
+    },
+    validate(args, context) {
+      const source = parseRange(args.sheet ? `${args.sheet}!${args.source}` : args.source);
+      const target = parseRange(args.sheet ? `${args.sheet}!${args.target}` : args.target);
+
+      if (source.cols !== 1 || target.cols !== 1) {
+        throw new Error("transform_column works on a single column at a time");
+      }
+
+      // Same padding habit as write_formula: keep the job inside the real data.
+      let sourceEnd = source.end.row;
+      const lastDataRow = context?.lastRow;
+      let clamped = false;
+      if (Number.isInteger(lastDataRow) && sourceEnd > lastDataRow && source.start.row <= lastDataRow) {
+        sourceEnd = lastDataRow;
+        clamped = true;
+      }
+
+      const rows = sourceEnd - source.start.row + 1;
+      if (rows < 1) throw new Error("The source range is empty");
+      if (rows > 5000) throw new Error(`That is ${rows} rows; the limit is 5000`);
+
+      const instruction = String(args.instruction ?? "").trim();
+      if (instruction.length < 8) throw new Error("instruction must describe the transformation");
+      if (instruction.length > 2000) throw new Error("instruction is too long");
+
+      const sourceAddress = `${indexToColumn(source.start.col)}${source.start.row}:${indexToColumn(source.start.col)}${sourceEnd}`;
+      const targetAddress = `${indexToColumn(target.start.col)}${target.start.row}:${indexToColumn(target.start.col)}${target.start.row + rows - 1}`;
+
+      return {
+        type: "transform_column",
+        sheet: source.sheet ?? target.sheet,
+        source: sourceAddress,
+        address: targetAddress,
+        instruction,
+        rows,
+        inPlace: sourceAddress === targetAddress,
+        clamped,
+        summary:
+          `Rewrite ${rows} row${rows === 1 ? "" : "s"} from ${sourceAddress} into ${targetAddress}` +
+          (clamped ? " (trimmed to the rows that contain data)" : ""),
+      };
+    },
+  },
+
+  split_column: {
+    description:
+      "Split one messy column into several clean columns, row by row, over the whole column. " +
+      "Use when a single cell holds several fields jammed together — a raw CSV line, " +
+      '"NAME 123 MAIN ST CITY STATE 12345", "Last, First" — and the pieces belong in separate ' +
+      "columns. Name the output columns in order. This reads every row, not just the sample. " +
+      "IMPORTANT: your columns must account for EVERY part of the input. Look at the sample rows " +
+      "and count the distinct pieces before choosing. If one CSV field holds both a person's name " +
+      "and a street address, that is TWO columns, not one — anything you leave uncovered is " +
+      "silently discarded.",
+    params: {
+      type: "object",
+      properties: {
+        source: { type: "string", description: 'Column range to read, e.g. "A2:A500".' },
+        target: { type: "string", description: 'Top-left cell of the output block, e.g. "B2".' },
+        columns: {
+          type: "array",
+          description: 'Output column headers, in order, e.g. ["Name","Street","City","State","ZIP"].',
+          items: { type: "string" },
+        },
+        instruction: {
+          type: "string",
+          description: "How to pull the fields out of one value, including how to handle missing pieces.",
+        },
+        sheet: { type: "string" },
+      },
+      required: ["source", "target", "columns", "instruction"],
+    },
+    validate(args, context) {
+      const source = parseRange(args.sheet ? `${args.sheet}!${args.source}` : args.source);
+      const target = parseRange(args.sheet ? `${args.sheet}!${args.target}` : args.target);
+      if (source.cols !== 1) throw new Error("split_column reads a single column");
+
+      const columns = (Array.isArray(args.columns) ? args.columns : [])
+        .map((c) => String(c ?? "").trim())
+        .filter(Boolean);
+      if (columns.length < 2) throw new Error("split_column needs at least two output columns");
+      if (columns.length > 20) throw new Error("split_column supports at most 20 output columns");
+
+      const instruction = String(args.instruction ?? "").trim();
+      if (instruction.length < 8) throw new Error("instruction must describe how to split each value");
+      if (instruction.length > 2000) throw new Error("instruction is too long");
+
+      let sourceEnd = source.end.row;
+      const lastDataRow = context?.lastRow;
+      let clamped = false;
+      if (Number.isInteger(lastDataRow) && sourceEnd > lastDataRow && source.start.row <= lastDataRow) {
+        sourceEnd = lastDataRow;
+        clamped = true;
+      }
+
+      const rows = sourceEnd - source.start.row + 1;
+      if (rows < 1) throw new Error("The source range is empty");
+      if (rows > 5000) throw new Error(`That is ${rows} rows; the limit is 5000`);
+      if (rows * columns.length > MAX_CELLS_PER_ACTION) {
+        throw new Error(`That would write ${rows * columns.length} cells; the limit is ${MAX_CELLS_PER_ACTION}`);
+      }
+
+      // The output block would overwrite the column it is reading from.
+      const targetEndCol = target.start.col + columns.length - 1;
+      if (target.start.col <= source.start.col && targetEndCol >= source.start.col) {
+        throw new Error(
+          `The output would overwrite the source column ${indexToColumn(source.start.col)}. Pick a target to its right.`,
+        );
+      }
+
+      const sourceAddress = `${indexToColumn(source.start.col)}${source.start.row}:${indexToColumn(source.start.col)}${sourceEnd}`;
+      const targetAddress = `${indexToColumn(target.start.col)}${target.start.row}:${indexToColumn(targetEndCol)}${target.start.row + rows - 1}`;
+      const headerAddress = target.start.row > 1
+        ? `${indexToColumn(target.start.col)}${target.start.row - 1}:${indexToColumn(targetEndCol)}${target.start.row - 1}`
+        : null;
+
+      return {
+        type: "split_column",
+        sheet: source.sheet ?? target.sheet,
+        source: sourceAddress,
+        address: targetAddress,
+        headerAddress,
+        columns,
+        instruction,
+        rows,
+        clamped,
+        summary:
+          `Split ${rows} row${rows === 1 ? "" : "s"} of ${sourceAddress} into ${columns.length} columns ` +
+          `(${columns.join(", ")}) at ${targetAddress}` + (clamped ? " (trimmed to the rows that contain data)" : ""),
+      };
+    },
+  },
+
   format_cells: {
     description:
       "Change how a range looks: number format, bold, italic, or background colour. " +

@@ -1,137 +1,164 @@
-# Excel AI Local
+<div align="center">
 
-A fully offline AI assistant for Microsoft Excel on macOS. A chat pane inside Excel that
-can read your selection, answer questions about the sheet, and propose changes you
-approve before anything is written.
+# Exovelletron
 
-Nothing leaves your Mac. There is no account, no API key, and no network call after
-setup.
+**A private AI assistant that lives inside Microsoft Excel.**
+
+Ask questions about your spreadsheet, and it answers. Ask it to change something, and it
+shows you exactly what it will do before it does it.
+
+Everything runs on your own Mac. No account, no API key, no internet after setup.
+
+</div>
 
 ---
 
-## What it does
+## What it can do
 
-- **Chat about the open workbook.** The pane sees your selection, the column headers, and
-  a sample of rows.
-- **Proposes changes rather than making them.** When the model wants to edit the sheet it
-  emits a structured action, which the pane renders as a preview showing the exact cells
-  that will change. Nothing is written until you click **Apply**, and every applied change
-  has an **Undo**.
-- **Prefers formulas over pasted values,** because the model only ever sees a sample of
-  your rows and a formula stays correct as data changes.
+| | |
+|---|---|
+| **Explain your data** | "What am I looking at?" — it reads your selection and tells you. |
+| **Write formulas** | Describe the calculation; it fills the column and adjusts references per row. |
+| **Split messy columns** | One cell holding `"NAME 123 MAIN ST","CITY","ST","12345"`? It breaks that into proper named columns. |
+| **Clean up values** | Standardise addresses to USPS format, fix inconsistent dates, normalise names — across **every row**, not just the ones on screen. |
+| **Format the sheet** | Bold headers, fills, currency and date formats. |
+| **Find problems** | Blanks, duplicates, values that look wrong. |
 
-Supported actions: write values, fill a formula, format cells, insert a column, sort a
-range.
+**Nothing is written until you click Apply**, and every change has an **Undo**.
 
-## Requirements
-
-- macOS on Apple Silicon
-- Microsoft Excel for Mac (tested against 16.111)
-- ~3 GB of disk for the default model, 8 GB RAM minimum
+---
 
 ## Install
 
-1. Open `Excel AI Local-1.0.0-arm64.dmg` and drag the app to Applications.
-2. Launch it. The setup panel walks through three steps:
-   - **Local certificate** — one macOS password prompt.
-   - **Excel add-in** — see the note below.
-   - **Model** — a one-time 2.9 GB download, verified against a SHA-256 digest.
-3. Restart Excel. The add-in appears on the **Home** tab as **Excel AI Local**.
+1. Open **`Exovelletron-1.0.0-arm64.dmg`** and drag the app to Applications.
+2. Open Exovelletron. It walks you through three steps:
 
-### The add-in step asks you to confirm a folder
+   | Step | What happens |
+   |---|---|
+   | **Local certificate** | One macOS password prompt. Excel only loads add-ins over HTTPS. |
+   | **Excel add-in** | A folder picker opens. Click **Grant Access**. |
+   | **Model** | A one-time 2.9 GB download, verified as it lands. |
 
-macOS seals Excel's add-in folder
-(`~/Library/Containers/com.microsoft.Excel/Data/Documents/wef`) off from every other
-process. Granting Full Disk Access does **not** fix it — that was tested, and Terminal
-*with* Full Disk Access is still refused.
+3. Quit and reopen Excel.
+4. **Home** tab → **Add-ins** → **Exovelletron**.
 
-What does work is picking the folder in a native open panel: that counts as explicit
-consent, so macOS issues a sandbox extension and the write succeeds. The app opens the
-picker already pointing at the right folder; you click **Grant Access** and it installs
-itself. One click, once.
+That's it. From then on it just works — open Excel, click the button.
+
+### Why the folder picker?
+
+macOS seals Excel's add-in folder off from every other program. Granting Full Disk Access
+does **not** help — that was tested, and even Terminal *with* Full Disk Access is refused.
+Picking the folder yourself counts as permission, so the app opens the picker already
+pointing at the right place. One click, once.
+
+---
+
+## Requirements
+
+- **macOS on Apple Silicon** (M1 or newer)
+- **Microsoft Excel for Mac** — tested on 16.111
+- **8 GB RAM** and about 3 GB of disk
+
+---
 
 ## Models
 
-| Model | Download | RAM | Notes |
-|---|---|---|---|
-| Qwen3.5 2B | 1.34 GB | 4 GB+ | Fastest, weakest at multi-step reasoning |
-| **Qwen3.5 4B** | **2.91 GB** | **8 GB+** | **Default.** Best balance |
-| Qwen3.5 9B | 5.97 GB | 16 GB+ | Best at complex analysis |
+Pick a different one any time from the app; it tells you how well each fits your Mac.
 
-All are Unsloth `UD-Q4_K_XL` dynamic quantisations, which hold up better than a flat
-`Q4_K_M` at effectively the same size. Downloads resume if interrupted and are rejected if
-the digest does not match.
+| Model | Download | Best for |
+|---|---|---|
+| Qwen3.5 2B | 1.3 GB | Older Macs, fastest replies |
+| **Qwen3.5 4B** | **2.9 GB** | **Default — the right balance** |
+| Qwen3.5 9B | 6.0 GB | Complex analysis, 16 GB+ Macs |
 
-On an M5 Pro the 4B model runs at roughly **60 tokens/second** with all layers on the GPU.
+All are Unsloth `UD-Q4_K_XL` dynamic quantisations. Downloads resume if interrupted and
+are rejected outright if the checksum does not match.
 
-## How it is put together
+On an M5 Pro the 4B model runs at roughly **60 tokens/second**, entirely on the GPU.
 
-```
-Excel task pane  ──HTTPS + SSE──▶  local server (127.0.0.1)  ──▶  node-llama-cpp / Metal
-   Office.js                        serves pane + API              model in ~/Library
-```
+---
 
-The pane and the API are served from the same origin (`https://localhost:39217`). Excel
-renders the task pane as an HTTPS page, so a plain `http://localhost` call would be blocked
-as mixed content; same-origin HTTPS sidesteps both that and CORS. The app mints a private
-CA, trusts it in the login keychain, and issues a leaf for `localhost`.
-
-**Offline:** the Office.js runtime is vendored and served locally rather than loaded from
-Microsoft's CDN, and its telemetry sink is replaced with a no-op stub. The pane's
-Content-Security-Policy pins `connect-src` to our own origin, so it cannot reach the
-internet even if something tried.
-
-**Security:** the server binds `127.0.0.1` only. Every API call requires a random
-per-run session token injected into the pane at serve time, plus an origin check, so other
-local software and stray browser tabs cannot drive it.
-
-### Layout
+## How it works
 
 ```
-core/       engine, model catalog/downloader, HTTPS server, setup steps  (unit tested)
-taskpane/   the Excel-side UI: sheet reading, action preview, chat
-desktop/    Electron shell: control panel, tray, setup wizard
-shared/     design tokens used by both UIs
-scripts/    build, icon generation, packaging, smoke test
+┌── Microsoft Excel ─────────────────┐
+│  Task pane                          │
+│    reads your selection             │
+│    shows changes before applying    │
+└──────────────┬──────────────────────┘
+               │ HTTPS, localhost only
+┌──────────────▼──────────────────────┐
+│  Exovelletron.app                   │
+│    local web server (127.0.0.1)     │
+│    Qwen3.5 running on the GPU       │
+└─────────────────────────────────────┘
 ```
 
-## Development
+**Private by construction, not by promise:**
+
+- The server listens on `127.0.0.1` only — invisible to your network.
+- The Office.js runtime is bundled with the app instead of loaded from Microsoft's CDN,
+  and its telemetry component is replaced with a stub that does nothing.
+- The task pane's Content-Security-Policy allows connections to *one* address: itself.
+- Every request needs a random token created fresh each time the app starts.
+
+---
+
+## For developers
 
 ```bash
 npm install
-npm run prepare:assets   # vendor Office.js, generate icons, build the pane
-npm run dev              # run the app from source
-npm test                 # 90 unit tests
+npm run prepare:assets   # bundle Office.js, generate icons, build the pane
+npm run dev              # run from source
+npm test                 # 172 tests
+npm run dist             # build the signed .app and .dmg
 ```
 
-Other commands:
+| Folder | What's in it |
+|---|---|
+| `core/` | Engine, model catalog, downloader, HTTPS server, setup — all unit tested |
+| `taskpane/` | The Excel-side UI: reading the sheet, previewing changes, chat |
+| `desktop/` | Electron shell: control panel, tray, setup wizard |
+| `shared/` | Design tokens used by both interfaces |
+
+Two development harnesses render the pane in a browser so you don't have to rebuild into
+Excel to see a change:
 
 ```bash
-node scripts/fetch-model.mjs qwen3.5-4b   # download a model from the CLI
-node scripts/smoke-engine.mjs             # end-to-end check against the real model
-npm run dist                              # build the signed .app and .dmg
+npm run build:web -- --dev
+# /app/preview.html  — the transcript components against sample data
+# /app/debug.html    — the whole pane, with Office and the API stubbed
 ```
-
-`npm run build:web -- --dev` also emits `/app/preview.html`, a harness that renders the
-transcript components against sample data so the pane can be iterated on in a browser
-instead of inside Excel.
 
 ### Two build details worth knowing
 
-- **Packaging happens in `~/Library/Caches`, not in the project.** This tree lives under
-  `~/Desktop`, which iCloud syncs and stamps with `com.apple.macl` and resource-fork
-  metadata. `codesign` rejects those as "detritus", and since signing itself writes to the
-  files they get re-stamped faster than any cleanup can strip them. Building outside the
-  synced tree avoids it. The finished DMG is copied back to `release/`.
+- **Packaging happens in `~/Library/Caches`.** If the project lives under `~/Desktop` or
+  `~/Documents`, iCloud stamps every file with metadata that `codesign` rejects as
+  "detritus" — and because signing writes to the files, they get re-stamped faster than
+  any cleanup can strip them. Building outside the synced tree avoids it entirely.
 - **The DMG is signed but not notarized.** Notarization needs a paid Apple Developer
-  account. On your own machine this is irrelevant; sending the DMG to someone else will hit
+  account. Irrelevant on your own machine; sending the DMG to someone else will hit
   Gatekeeper until it is notarized.
+
+Architecture notes and the reasoning behind the trickier decisions are in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
 
 ## Known limits
 
-- macOS Apple Silicon only. The core is platform-agnostic, but the installer, certificate
-  trust, and add-in registration are macOS-specific.
-- One model resident at a time; switching unloads and reloads.
-- The model sees a sample of rows, never the whole sheet. This is deliberate — it is what
-  keeps a 200,000-row workbook from being serialised across the Office bridge — and it is
-  why the prompt pushes hard toward formulas.
+- macOS Apple Silicon only. The core is portable; the installer, certificate trust, and
+  add-in registration are macOS-specific.
+- One model loaded at a time.
+- The chat sees a sample of your rows — the first 60 and the last 15 — plus the true row
+  count. Row-by-row jobs (splitting, cleaning) read **every** row regardless; that work
+  runs in batches rather than through the chat context.
+- A column split can only redistribute what you give it. If the model picks too few output
+  columns, leftover text would be dropped — so the app measures how much of each row
+  survived and warns you when something was lost.
+
+---
+
+## Licence
+
+MIT.
