@@ -96,6 +96,24 @@ optional Metal 4 tensor-API shader variant, fails to build it, disables that pat
 the standard Metal kernels. All 33 layers still offload; measured 61 tok/s. It is filtered
 out of the log stream rather than surfaced as an error.
 
+**4. A 10-year TLS certificate silently broke the whole add-in.** Excel refused the pane
+with "the content is blocked because it isn't signed by a valid security certificate" even
+though the issuing root was trusted. Apple caps TLS *server* certificate lifetimes at 398
+days and WebKit enforces it. The CA is still long-lived — re-trusting costs a password
+prompt — but the leaf is now 397 days and renews from the existing CA, so rotation is
+silent.
+
+**5. Assigning `range.formulas` does not fill like the fill handle.** Writing the same
+formula string into every cell of a range makes Excel store it verbatim, so every row
+computed the anchor row and the column showed one repeated value. The fix is to write the
+anchor cell and `copyFrom` it across the range, which applies Excel's own
+relative-reference rules. `offsetFormula` remains, but only for rendering the preview.
+
+**6. Models pad a fill-down to a round number.** Asked to fill Revenue for six rows, the
+model proposed `E2:E1000`. The prompt now states the rule, and — since prompts are not
+guarantees — validation clamps a fill to the last row of the used range and says so in the
+summary.
+
 ## The add-in installation constraint
 
 Excel reads sideloaded manifests from
@@ -108,12 +126,14 @@ Access is therefore *not* the fix, and the UI deliberately does not suggest it �
 someone into their security settings for a remedy that fails is worse than asking for the
 alternative.
 
-What works is a drag in Finder, because the drop carries user intent and macOS issues a
-sandbox extension for it. The wizard detects the blocked state by probing, then stages the
-manifest, reveals it selected, and opens the destination alongside it. One drag, once.
+What works is a folder chosen in a native open panel. That is explicit consent, so macOS
+issues a sandbox extension and the write succeeds — measured directly: `EPERM` before the
+pick, success immediately after. The wizard detects the blocked state by probing, then
+opens the picker already pointing at `wef`; the user clicks Grant Access and the manifest
+installs itself. A Finder drag also works and is kept as a fallback.
 
-This is the single place the "installer does everything" goal could not be fully met, and
-the limitation is the platform's rather than the design's.
+This is the single place the "installer does everything" goal needs a click from the user,
+and the limitation is the platform's rather than the design's.
 
 ## Testing
 

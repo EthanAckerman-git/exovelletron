@@ -11,7 +11,7 @@
  */
 import { EventEmitter } from "node:events";
 import os from "node:os";
-import { ACTION_SPECS, validateAction } from "./actions.js";
+import { ACTION_SPECS, validateAction, lastRowOf } from "./actions.js";
 import { SYSTEM_PROMPT, buildUserTurn } from "./prompt.js";
 
 /** @typedef {"idle"|"loading"|"ready"|"generating"|"error"} EngineState */
@@ -197,14 +197,14 @@ export class Engine extends EventEmitter {
    * validated proposal; a rejected proposal returns its reason so the model can correct
    * itself within the same turn instead of failing silently.
    */
-  #buildFunctions(defineChatSessionFunction, proposals, rejections) {
+  #buildFunctions(defineChatSessionFunction, proposals, rejections, sheetFacts) {
     const fns = {};
     for (const [name, spec] of Object.entries(ACTION_SPECS)) {
       fns[name] = defineChatSessionFunction({
         description: spec.description,
         params: spec.params,
         handler: (args) => {
-          const result = validateAction(name, args);
+          const result = validateAction(name, args, sheetFacts);
           if (result.ok) {
             proposals.push(result.action);
             this.emit("action", result.action);
@@ -265,7 +265,7 @@ export class Engine extends EventEmitter {
         // Belt and braces alongside the wrapper's "discourage": even if the model opens
         // a thought block, it cannot spend the reply budget inside it.
         budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
-        functions: this.#buildFunctions(mod.defineChatSessionFunction, proposals, rejections),
+        functions: this.#buildFunctions(mod.defineChatSessionFunction, proposals, rejections, { lastRow: lastRowOf(sheetContext) }),
         // Counting real tokens (not text chunks) keeps the reported rate honest — a
         // chunk can carry several tokens, or none at all.
         onResponseChunk: (chunk) => {

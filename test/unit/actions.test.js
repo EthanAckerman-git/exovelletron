@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseRange, columnToIndex, indexToColumn, validateAction, stripBlankParams,
-  MAX_CELLS_PER_ACTION, ACTION_SPECS, ACTION_NAMES,
+  MAX_CELLS_PER_ACTION, ACTION_SPECS, ACTION_NAMES, lastRowOf,
 } from "../../core/llm/actions.js";
 
 describe("column letter conversion", () => {
@@ -75,6 +75,49 @@ describe("validateAction: write_formula", () => {
   it("refuses to fill more than the cell budget", () => {
     const r = validateAction("write_formula", { address: "A1:A60000", formula: "=1" });
     expect(r).toMatchObject({ ok: false, error: expect.stringContaining(String(MAX_CELLS_PER_ACTION)) });
+  });
+
+  // Regression: asked to fill Revenue for six rows of data, the model proposed E2:E1000,
+  // which would have written formulas over 994 empty rows.
+  it("trims a fill that runs past the last row of data", () => {
+    const r = validateAction("write_formula", { address: "E2:E1000", formula: "=C2*D2" }, { lastRow: 6 });
+    expect(r.ok).toBe(true);
+    expect(r.action.address).toBe("E2:E6");
+    expect(r.action.clamped).toBe(true);
+    expect(r.action.summary).toMatch(/Fill 5 cells/);
+    expect(r.action.summary).toMatch(/trimmed to the rows that contain data/);
+  });
+
+  it("leaves a fill that already fits the data alone", () => {
+    const r = validateAction("write_formula", { address: "E2:E6", formula: "=C2*D2" }, { lastRow: 6 });
+    expect(r.action.address).toBe("E2:E6");
+    expect(r.action.clamped).toBe(false);
+    expect(r.action.summary).not.toMatch(/trimmed/);
+  });
+
+  it("does not trim when the whole range sits below the data", () => {
+    // Writing into fresh rows past the end is a legitimate request, not padding.
+    const r = validateAction("write_formula", { address: "E20:E30", formula: "=1" }, { lastRow: 6 });
+    expect(r.action.address).toBe("E20:E30");
+    expect(r.action.clamped).toBe(false);
+  });
+
+  it("ignores the bound when the used range is unknown", () => {
+    const r = validateAction("write_formula", { address: "E2:E1000", formula: "=1" }, {});
+    expect(r.action.address).toBe("E2:E1000");
+  });
+});
+
+describe("lastRowOf", () => {
+  it("reads the final row from a used range", () => {
+    expect(lastRowOf({ usedRange: { address: "A1:E501" } })).toBe(501);
+    expect(lastRowOf({ usedRange: { address: "Sheet1!B2:D9" } })).toBe(9);
+  });
+
+  it("returns null when there is nothing usable", () => {
+    expect(lastRowOf(null)).toBeNull();
+    expect(lastRowOf({})).toBeNull();
+    expect(lastRowOf({ usedRange: { address: "garbage" } })).toBeNull();
   });
 });
 

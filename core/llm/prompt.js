@@ -22,6 +22,7 @@ How to work:
 
 Formula rules:
 - Write the formula for the FIRST cell of the target range; Excel adjusts relative references down the range automatically.
+- Size the range to the rows that actually hold data. The used range tells you the last row — if data ends at row 120, fill E2:E120, never E2:E1000. Padding to a round number puts formulas on thousands of empty rows.
 - Use standard function names in English, comma-separated arguments.
 - Guard divisions that could hit empty cells, e.g. =IFERROR(A2/B2,"").`;
 

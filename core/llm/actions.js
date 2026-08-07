@@ -129,8 +129,10 @@ export const ACTION_SPECS = {
 
   write_formula: {
     description:
-      "Write an Excel formula into a range. The same formula is written to every cell, so relative " +
-      'references adjust per row exactly like dragging a fill handle. Always start with "=".',
+      "Fill an Excel formula down a range, exactly like dragging the fill handle: write it for the " +
+      'FIRST cell and relative references adjust per row automatically. Always start with "=". ' +
+      "Size the range to the rows that actually contain data — do not pad it out to a round number " +
+      "like 1000, which would put formulas on thousands of empty rows.",
     params: {
       type: "object",
       properties: {
@@ -140,20 +142,39 @@ export const ACTION_SPECS = {
       },
       required: ["address", "formula"],
     },
-    validate(args) {
+    validate(args, context) {
       const range = parseRange(args.sheet ? `${args.sheet}!${args.address}` : args.address);
       const formula = String(args.formula ?? "").trim();
       if (!formula.startsWith("=")) throw new Error('formula must start with "="');
       if (formula.length > 8192) throw new Error("formula is too long");
-      if (range.rows * range.cols > MAX_CELLS_PER_ACTION) {
-        throw new Error(`That would fill ${range.rows * range.cols} cells; the limit is ${MAX_CELLS_PER_ACTION}`);
+
+      // Models habitually pad a fill-down to a round number — "E2:E1000" for six rows of
+      // data — which buries the sheet in formulas over empty cells. Clamp to the rows
+      // that actually hold data; the preview then shows the honest, smaller range.
+      let { end, address } = range;
+      let clamped = false;
+      const lastDataRow = context?.lastRow;
+      if (Number.isInteger(lastDataRow) && end.row > lastDataRow && range.start.row <= lastDataRow) {
+        end = { ...end, row: lastDataRow };
+        address = `${indexToColumn(range.start.col)}${range.start.row}:${indexToColumn(end.col)}${end.row}`;
+        clamped = true;
       }
+
+      const rows = end.row - range.start.row + 1;
+      const cells = rows * range.cols;
+      if (cells > MAX_CELLS_PER_ACTION) {
+        throw new Error(`That would fill ${cells} cells; the limit is ${MAX_CELLS_PER_ACTION}`);
+      }
+
       return {
         type: "write_formula",
         sheet: range.sheet,
-        address: range.address,
+        address,
         formula,
-        summary: `Fill ${range.rows * range.cols} cell${range.rows * range.cols === 1 ? "" : "s"} in ${range.sheet ? `${range.sheet}!` : ""}${range.address} with ${formula}`,
+        clamped,
+        summary:
+          `Fill ${cells} cell${cells === 1 ? "" : "s"} in ${range.sheet ? `${range.sheet}!` : ""}${address} with ${formula}` +
+          (clamped ? " (trimmed to the rows that contain data)" : ""),
       };
     },
   },
@@ -280,16 +301,39 @@ export function stripBlankParams(args) {
 }
 
 /**
+ * Last row of the worksheet's used range, or null when unknown.
+ * Used to keep a fill-down inside the data rather than padding to a round number.
+ */
+export function lastRowOf(sheetContext) {
+  const address = sheetContext?.usedRange?.address;
+  if (typeof address !== "string") return null;
+  try {
+    return parseRange(address).end.row;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate raw tool arguments into a normalized action.
+ * @param {string} name
+ * @param {object} args
+ * @param {{lastRow?: number|null}} [context] worksheet facts used to bound the action
  * @returns {{ok:true,action:object} | {ok:false,error:string}}
  */
-export function validateAction(name, args) {
+export function validateAction(name, args, context = {}) {
   const spec = ACTION_SPECS[name];
   if (!spec) return { ok: false, error: `Unknown action "${name}"` };
   if (!args || typeof args !== "object") return { ok: false, error: `${name} received no arguments` };
   try {
     const cleaned = stripBlankParams(args);
-    return { ok: true, action: { id: `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...spec.validate(cleaned) } };
+    return {
+      ok: true,
+      action: {
+        id: `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ...spec.validate(cleaned, context),
+      },
+    };
   } catch (err) {
     return { ok: false, error: err.message };
   }

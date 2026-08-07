@@ -186,6 +186,39 @@ export async function exportManifest(port, destDir, p = defaultPaths) {
   return file;
 }
 
+/**
+ * Install the manifest into a directory the user picked in a native open panel.
+ *
+ * Selecting a folder in the panel is explicit consent, so macOS issues a sandbox
+ * extension for it — which is how this reaches Excel's container when a plain write
+ * gets EPERM and Full Disk Access does not help.
+ *
+ * The user may land on `wef` itself or on its parent `Documents`; both are accepted, and
+ * anything else is refused so a mis-click cannot scatter manifests around the disk.
+ *
+ * @returns {Promise<string>} the written file path
+ */
+export async function installManifestAtChosenDir(chosenDir, port, p = defaultPaths) {
+  const chosen = path.resolve(chosenDir);
+  const wef = path.resolve(p.wefDir);
+  const documents = path.dirname(wef);
+
+  let target;
+  if (chosen === wef) target = chosen;
+  else if (chosen === documents) target = wef;
+  else if (path.basename(chosen) === "wef") target = chosen;
+  else {
+    throw new Error(
+      `That folder isn't Excel's add-in folder. Select "wef" (or the "Documents" folder that contains it) inside ${path.basename(path.dirname(documents))}.`,
+    );
+  }
+
+  await mkdir(target, { recursive: true });
+  const file = path.join(target, MANIFEST_FILENAME);
+  await writeFile(file, buildManifest(port), "utf8");
+  return file;
+}
+
 export async function uninstallManifest(p = defaultPaths) {
   await rm(manifestPath(p), { force: true });
 }

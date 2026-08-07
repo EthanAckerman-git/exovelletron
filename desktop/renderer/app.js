@@ -82,24 +82,25 @@ function renderSetup(app) {
       body.appendChild(el("p", "step__note", "Choose a model below to download."));
       li.appendChild(body);
     } else if (!step.done && step.blocked) {
-      // macOS seals Excel's container against every other process, so this step is a
-      // hand-off: two Finder windows and one drag.
+      // macOS seals Excel's container against other processes, but honours a folder the
+      // user picks in an open panel. One click, one confirm, done.
       const how = el("ol", "step__how");
-      how.appendChild(el("li", null, "Two Finder windows open: the manifest, and Excel's add-ins folder."));
-      how.appendChild(el("li", null, "Drag excel-ai-local.manifest.xml into the Excel folder."));
-      how.appendChild(el("li", null, "Quit and reopen Excel, then click Check again."));
+      how.appendChild(el("li", null, "A folder picker opens, already pointing at Excel's “wef” folder."));
+      how.appendChild(el("li", null, "Click Grant Access. The add-in installs itself."));
+      how.appendChild(el("li", null, "Quit and reopen Excel."));
       body.appendChild(how);
 
       const row = el("div", "step__buttons");
-      const open = el("button", "btn btn--primary", "Open both folders");
-      open.addEventListener("click", async () => {
+      const grant = el("button", "btn btn--primary", busy ? "Installing…" : "Grant access and install");
+      grant.disabled = busy;
+      grant.addEventListener("click", () => runStep(step, "addin-grant"));
+
+      const manual = el("button", "linkish", "Install by hand instead");
+      manual.addEventListener("click", async () => {
         await window.eal.setup.manualAddin();
         toast("Drag the highlighted file into the wef folder.");
       });
-      const recheck = el("button", "btn btn--quiet", busy ? "Checking…" : "Check again");
-      recheck.disabled = busy;
-      recheck.addEventListener("click", () => runStep(step));
-      row.append(open, recheck);
+      row.append(grant, manual);
       body.appendChild(row);
       li.appendChild(body);
     } else if (!step.done) {
@@ -215,15 +216,25 @@ function renderModels(app) {
 
 /* ---------------------------------------------------------------------- steps */
 
-async function runStep(step) {
+/**
+ * @param {object} step
+ * @param {string} [action]  what to run; defaults to the step's own id. Kept separate so
+ *                           a step can offer more than one route to done without its
+ *                           busy state and error slot drifting onto a different key.
+ */
+async function runStep(step, action = step.id) {
   state.busySteps.add(step.id);
   state.stepErrors.delete(step.id);
   await refresh();
   try {
-    if (step.id === "certificate") {
+    if (action === "certificate") {
       await window.eal.setup.certificate();
       toast("Certificate created and trusted.");
-    } else if (step.id === "addin") {
+    } else if (action === "addin-grant") {
+      const result = await window.eal.setup.grantAddinAccess();
+      if (result.cancelled) toast("Cancelled. The add-in was not installed.");
+      else toast("Add-in installed. Quit and reopen Excel to see it.");
+    } else if (action === "addin") {
       await window.eal.setup.addin();
       toast("Add-in installed. Restart Excel to see it.");
     }

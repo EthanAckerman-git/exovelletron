@@ -6,12 +6,13 @@
  */
 import { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, dialog } from "electron";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { paths, ensureDirs, loadConfig, saveConfig, DEFAULT_PORT } from "../core/config.js";
 import { ensureCertFiles, ensureTrustedCerts } from "../core/setup/certs.js";
-import { installManifest, isManifestInstalled, manifestPath, exportManifest } from "../core/setup/manifest.js";
+import { installManifest, isManifestInstalled, manifestPath, exportManifest, installManifestAtChosenDir } from "../core/setup/manifest.js";
 import { preflight } from "../core/setup/preflight.js";
 import { createAppServer } from "../core/server/server.js";
 import { ModelStore } from "../core/models/store.js";
@@ -220,30 +221,41 @@ function registerIpc() {
   });
 
   /**
-   * Hand the install to Finder.
+   * Install the add-in via a folder the user picks in a native open panel.
    *
-   * On macOS 26+ an app-container Data directory is sealed off from every other process
-   * — not just sandboxed ones. Measured on this machine: a signed app, the shell, and
-   * even Terminal *with* Full Disk Access are all refused, and no TCC prompt is offered.
-   * Deliberately not suggesting Full Disk Access here: it does not work, and sending
-   * someone into their security settings for a fix that fails is worse than asking for
-   * the drag.
+   * On macOS 26+ an app-container Data directory is sealed against every other process.
+   * Measured on this machine: the shell, a signed app, scripted Finder, and Terminal
+   * *with* Full Disk Access are all refused with EPERM, and no permission prompt is
+   * offered — so Full Disk Access is deliberately never suggested to the user.
    *
-   * What does work is a drag in Finder, because the drop carries user intent and macOS
-   * issues a sandbox extension for it. So: stage the manifest, reveal it selected, and
-   * open the destination alongside.
+   * Picking the folder in an open panel is different: it is explicit consent, so macOS
+   * issues a sandbox extension and the write succeeds. Verified end to end — EPERM
+   * before the pick, success after.
    */
+  ipcMain.handle("setup:grantAddinAccess", async () => {
+    const startAt = existsSync(paths.wefDir) ? paths.wefDir : path.dirname(paths.wefDir);
+    const result = await dialog.showOpenDialog(win, {
+      title: "Select Excel's add-in folder",
+      message: "Select the “wef” folder so Excel AI Local can install the add-in",
+      defaultPath: startAt,
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "Grant Access",
+    });
+
+    if (result.canceled || !result.filePaths?.length) return { ok: false, cancelled: true };
+
+    const file = await installManifestAtChosenDir(result.filePaths[0], activePort, paths);
+    return { ok: true, file };
+  });
+
+  /** Last-resort fallback: stage the manifest and reveal it for a manual drag. */
   ipcMain.handle("setup:manualAddin", async () => {
     const exported = await exportManifest(activePort, path.join(paths.dataDir, "addin"), paths);
     shell.showItemInFolder(exported);
-
-    // Finder can open the container even where we cannot write to it. If the wef folder
-    // does not exist yet, fall back to its parent so there is still somewhere to drop.
     setTimeout(async () => {
       const opened = await shell.openPath(paths.wefDir);
       if (opened) await shell.openPath(path.dirname(paths.wefDir));
     }, 700);
-
     return { file: exported, destination: paths.wefDir };
   });
 

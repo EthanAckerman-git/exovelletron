@@ -6,13 +6,18 @@
  * 500-cell fill and then regrets it must be able to get their sheet back.
  */
 
+import { offsetFormula } from "../ui/formula.js";
+
 const targetSheet = (ctx, name) =>
   name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
 
-/** Repeat one formula across a range so relative references shift per cell. */
-function fillFormula(range, formula, rows, cols) {
-  range.formulas = Array.from({ length: rows }, () => Array.from({ length: cols }, () => formula));
-}
+const supportsCopyFrom = () => {
+  try {
+    return Office.context.requirements.isSetSupported("ExcelApi", "1.9");
+  } catch {
+    return false;
+  }
+};
 
 const dims = (address) => {
   const [a, b = a] = address.split(":");
@@ -36,10 +41,8 @@ export async function applyAction(action) {
     case "write_values":
       return applyWrite(action, (range) => { range.values = action.values; });
 
-    case "write_formula": {
-      const { rows, cols } = dims(action.address);
-      return applyWrite(action, (range) => fillFormula(range, action.formula, rows, cols));
-    }
+    case "write_formula":
+      return applyFormulaFill(action);
 
     case "format_cells":
       return applyFormat(action);
@@ -53,6 +56,53 @@ export async function applyAction(action) {
     default:
       throw new Error(`Cannot apply unsupported action "${action.type}"`);
   }
+}
+
+/**
+ * Fill a formula down a range with per-cell relative-reference adjustment.
+ *
+ * Assigning the same string to every cell of `range.formulas` does NOT behave like
+ * dragging the fill handle — Excel writes each formula verbatim, so every row ends up
+ * computing the anchor row and shows an identical result. The fix is to write the anchor
+ * cell and let Excel copy it across, which applies its own relative-reference rules.
+ *
+ * `copyFrom` needs ExcelApi 1.9; on anything older we compute the offsets ourselves.
+ */
+async function applyFormulaFill(action) {
+  const { rows, cols } = dims(action.address);
+
+  const snapshot = await Excel.run(async (ctx) => {
+    const range = targetSheet(ctx, action.sheet).getRange(action.address);
+    range.load(["formulas"]);
+    await ctx.sync();
+    return range.formulas;
+  });
+
+  await Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    const target = sheet.getRange(action.address);
+
+    if (supportsCopyFrom()) {
+      const anchor = target.getCell(0, 0);
+      anchor.formulas = [[action.formula]];
+      target.copyFrom(anchor, Excel.RangeCopyType.formulas);
+    } else {
+      target.formulas = Array.from({ length: rows }, (_, r) =>
+        Array.from({ length: cols }, (_, c) => offsetFormula(action.formula, r, c)));
+    }
+    await ctx.sync();
+  });
+
+  return {
+    message: action.summary,
+    undo: async () => {
+      await Excel.run(async (ctx) => {
+        const range = targetSheet(ctx, action.sheet).getRange(action.address);
+        range.formulas = snapshot;
+        await ctx.sync();
+      });
+    },
+  };
 }
 
 /** Shared path for the two value-writing actions: snapshot formulas, then write. */

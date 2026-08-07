@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("eal", {
   setup: {
     certificate: () => ipcRenderer.invoke("setup:certificate"),
     addin: () => ipcRenderer.invoke("setup:addin"),
+    grantAddinAccess: () => ipcRenderer.invoke("setup:grantAddinAccess"),
     manualAddin: () => ipcRenderer.invoke("setup:manualAddin"),
   },
 

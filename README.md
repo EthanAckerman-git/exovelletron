@@ -38,14 +38,17 @@ range.
    - **Model** — a one-time 2.9 GB download, verified against a SHA-256 digest.
 3. Restart Excel. The add-in appears on the **Home** tab as **Excel AI Local**.
 
-### The add-in step needs one drag from you
+### The add-in step asks you to confirm a folder
 
-macOS seals Excel's add-in folder (`~/Library/Containers/com.microsoft.Excel/Data/Documents/wef`)
-off from every other process. This is not something the app can work around, and it is not
-fixed by granting Full Disk Access — that was tested and is still refused. A drag in Finder
-works because the drop carries user intent, which macOS honours.
+macOS seals Excel's add-in folder
+(`~/Library/Containers/com.microsoft.Excel/Data/Documents/wef`) off from every other
+process. Granting Full Disk Access does **not** fix it — that was tested, and Terminal
+*with* Full Disk Access is still refused.
 
-So the app opens two Finder windows and you drag one file across. Ten seconds, once.
+What does work is picking the folder in a native open panel: that counts as explicit
+consent, so macOS issues a sandbox extension and the write succeeds. The app opens the
+picker already pointing at the right folder; you click **Grant Access** and it installs
+itself. One click, once.
 
 ## Models
 
