@@ -19,6 +19,7 @@ import { ModelStore } from "../core/models/store.js";
 import { ConversationStore } from "../core/history/store.js";
 import { Engine } from "../core/llm/engine.js";
 import { getModel, DEFAULT_MODEL_ID } from "../core/models/catalog.js";
+import { checkForUpdate, REPO_URL } from "../core/update.js";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +32,8 @@ let history = null;
 let config = null;
 let activePort = DEFAULT_PORT;
 let serverError = null;
+/** Result of the most recent release check; drives the tray's update entry. */
+let updateInfo = null;
 
 /* ------------------------------------------------------------------------ window */
 
@@ -103,8 +106,49 @@ function refreshTrayMenu() {
     { label: "Open Exovelletron", click: showWindow },
     { label: "Open Microsoft Excel", click: () => shell.openPath("/Applications/Microsoft Excel.app") },
     { type: "separator" },
+    ...(updateInfo?.status === "update"
+      ? [{ label: `Update available (${updateInfo.latest}) — Download`, click: () => shell.openExternal(updateInfo.url) }]
+      : []),
+    { label: "Check for Updates…", click: () => runUpdateCheck({ interactive: true }) },
+    { label: "Exovelletron on GitHub", click: () => shell.openExternal(REPO_URL) },
+    { type: "separator" },
     { label: "Quit", click: () => app.quit() },
   ]));
+}
+
+/**
+ * Ask GitHub whether a newer release exists. Quiet on launch; a dialog when the user
+ * asks. Failures (offline, private repo) stay silent in quiet mode — an update nag
+ * that cries wolf teaches people to ignore it.
+ */
+async function runUpdateCheck({ interactive = false } = {}) {
+  updateInfo = await checkForUpdate(app.getVersion());
+  refreshTrayMenu();
+
+  if (!interactive) return updateInfo;
+
+  if (updateInfo.status === "update") {
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      message: `Version ${updateInfo.latest} is available`,
+      detail: `You have ${app.getVersion()}. The new version is on the GitHub releases page.`,
+      buttons: ["Download", "Later"],
+      defaultId: 0,
+    });
+    if (response === 0) shell.openExternal(updateInfo.url);
+  } else {
+    await dialog.showMessageBox({
+      type: "info",
+      message: updateInfo.status === "current"
+        ? `You're up to date (${app.getVersion()})`
+        : "Could not check for updates",
+      detail: updateInfo.status === "current"
+        ? "This is the newest version of Exovelletron."
+        : "You may be offline, or the GitHub releases page isn't public. You can also check github.com/EthanAckerman-git/exovelletron directly.",
+      buttons: ["OK"],
+    });
+  }
+  return updateInfo;
 }
 
 /* ------------------------------------------------------------------------ server */
@@ -278,6 +322,8 @@ function registerIpc() {
   ipcMain.handle("app:openExcel", () => shell.openPath("/Applications/Microsoft Excel.app"));
   ipcMain.handle("app:revealModels", () => shell.openPath(paths.modelsDir));
   ipcMain.handle("app:openLanding", () => shell.openExternal(`https://localhost:${activePort}/`));
+  ipcMain.handle("app:openRepo", () => shell.openExternal(REPO_URL));
+  ipcMain.handle("app:checkUpdates", () => runUpdateCheck({ interactive: false }));
 
   ipcMain.handle("config:set", async (_e, patch) => {
     config = await saveConfig(patch, paths);
@@ -331,6 +377,9 @@ async function boot() {
 
   refreshTrayMenu();
   startEngine().catch((err) => send("app:engineError", err.message));
+
+  // A quiet launch-time release check; the tray gains a download entry if one exists.
+  runUpdateCheck().catch(() => { /* offline is fine */ });
 }
 
 app.whenReady().then(boot);

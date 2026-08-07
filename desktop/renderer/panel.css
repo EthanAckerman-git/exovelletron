@@ -281,6 +281,10 @@ body { background: var(--paper); overflow-y: auto; }
 }
 .foot .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* The credit line sits under the path row, without a second rule between them. */
+.foot--credit { margin-top: 8px; padding-top: 0; border-top: none; }
+.foot__links { display: flex; gap: 14px; }
+
 /* ---------------------------------------------------------------------- toast */
 
 .toast {

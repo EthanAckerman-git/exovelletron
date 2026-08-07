@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld("eal", {
     revealModels: () => ipcRenderer.invoke("app:revealModels"),
     openLanding: () => ipcRenderer.invoke("app:openLanding"),
     openPrivacySettings: () => ipcRenderer.invoke("app:openPrivacySettings"),
+    openRepo: () => ipcRenderer.invoke("app:openRepo"),
+    checkUpdates: () => ipcRenderer.invoke("app:checkUpdates"),
   },
 
   setConfig: (patch) => ipcRenderer.invoke("config:set", patch),

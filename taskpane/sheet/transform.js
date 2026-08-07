@@ -7,6 +7,14 @@
  * host.
  */
 import { streamTransform, streamExtract } from "../api.js";
+import {
+  loadHeaderFormat,
+  snapshotHeaderFormat,
+  headerStyleFrom,
+  applyHeaderStyle,
+  restoreHeader,
+  headerReferenceCell,
+} from "./style.js";
 
 const targetSheet = (ctx, name) =>
   name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -25,36 +33,28 @@ const indexToColumn = (index) => {
 };
 
 /**
- * The fill for header rows this app writes. Writing a plain-text header above a table
- * it just built looks unfinished, and expecting the model to remember to format it is
- * hoping, not engineering — so the app styles the header itself, every time.
+ * One snapshot pass before anything is written: the target block's formulas (for
+ * Undo), the header row's current look (for Undo), and the style the new header
+ * should take — continued from the sheet's own headers when it has any.
  */
-const HEADER_FILL = "#E9E9F4";
-
-/** Capture a header row's look so Undo can put it back exactly. */
-const loadHeaderFormat = (range) => {
-  range.load(["formulas"]);
-  range.format.fill.load("color");
-  range.format.font.load("bold");
-};
-
-const snapshotHeaderFormat = (range) => ({
-  formulas: range.formulas,
-  fill: range.format.fill.color,
-  bold: range.format.font.bold,
-});
-
-const styleHeader = (range) => {
-  range.format.font.bold = true;
-  range.format.fill.color = HEADER_FILL;
-};
-
-const restoreHeader = (range, saved) => {
-  range.formulas = saved.formulas;
-  range.format.font.bold = saved.bold;
-  if (saved.fill) range.format.fill.color = saved.fill;
-  else range.format.fill.clear();
-};
+async function snapshotBeforeWrite(action, address) {
+  return Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    const range = sheet.getRange(address);
+    range.load(["formulas"]);
+    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
+    if (header) loadHeaderFormat(header);
+    const refAddress = action.headerAddress ? headerReferenceCell(action.headerAddress) : null;
+    const ref = refAddress ? sheet.getRange(refAddress) : null;
+    if (ref) loadHeaderFormat(ref);
+    await ctx.sync();
+    return {
+      body: range.formulas,
+      header: header ? snapshotHeaderFormat(header) : null,
+      headerStyle: headerStyleFrom(ref ? snapshotHeaderFormat(ref) : null),
+    };
+  });
+}
 
 /**
  * @param {object} action  a validated transform_column action
@@ -75,15 +75,7 @@ export async function runTransform(action, handlers = {}) {
 
   // Snapshot the target before touching it, so Undo restores whatever was there —
   // including the source itself when the transform rewrites in place.
-  const snapshot = await Excel.run(async (ctx) => {
-    const sheet = targetSheet(ctx, action.sheet);
-    const range = sheet.getRange(action.address);
-    range.load(["formulas"]);
-    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
-    if (header) loadHeaderFormat(header);
-    await ctx.sync();
-    return { body: range.formulas, header: header ? snapshotHeaderFormat(header) : null };
-  });
+  const snapshot = await snapshotBeforeWrite(action, action.address);
 
   handlers.onPhase?.("transforming");
 
@@ -114,7 +106,7 @@ export async function runTransform(action, handlers = {}) {
     if (action.headerAddress) {
       const header = sheet.getRange(action.headerAddress);
       header.values = [action.columns];
-      styleHeader(header);
+      applyHeaderStyle(header, snapshot.headerStyle);
     }
     await ctx.sync();
   });
@@ -187,15 +179,7 @@ export async function runExtract(action, handlers = {}) {
   const endCol = indexToColumn(action.targetCol + width - 1);
   const address = `${indexToColumn(action.targetCol)}${action.targetRow}:${endCol}${action.targetRow + records.length - 1}`;
 
-  const snapshot = await Excel.run(async (ctx) => {
-    const sheet = targetSheet(ctx, action.sheet);
-    const range = sheet.getRange(address);
-    range.load(["formulas"]);
-    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
-    if (header) loadHeaderFormat(header);
-    await ctx.sync();
-    return { body: range.formulas, header: header ? snapshotHeaderFormat(header) : null };
-  });
+  const snapshot = await snapshotBeforeWrite(action, address);
 
   handlers.onPhase?.("writing");
 
@@ -205,7 +189,7 @@ export async function runExtract(action, handlers = {}) {
     if (action.headerAddress) {
       const header = sheet.getRange(action.headerAddress);
       header.values = [action.columns];
-      styleHeader(header);
+      applyHeaderStyle(header, snapshot.headerStyle);
     }
     await ctx.sync();
   });

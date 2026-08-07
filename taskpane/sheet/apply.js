@@ -7,6 +7,13 @@
  */
 
 import { offsetFormula } from "../ui/formula.js";
+import {
+  loadHeaderFormat,
+  snapshotHeaderFormat,
+  headerStyleFrom,
+  applyHeaderStyle,
+  headerReferenceCell,
+} from "./style.js";
 
 const targetSheet = (ctx, name) =>
   name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
@@ -182,7 +189,18 @@ async function applyInsertColumn(action) {
   await Excel.run(async (ctx) => {
     const sheet = targetSheet(ctx, action.sheet);
     sheet.getRange(`${action.before}:${action.before}`).insert(Excel.InsertShiftDirection.right);
-    if (action.header) sheet.getRange(`${action.before}1`).values = [[action.header]];
+    if (action.header) {
+      // The new header should look like the sheet's existing ones. The cell left of
+      // the inserted column keeps its position through the shift, so sample it.
+      const refAddress = headerReferenceCell(`${action.before}1`);
+      const ref = refAddress ? sheet.getRange(refAddress) : null;
+      if (ref) loadHeaderFormat(ref);
+      await ctx.sync();
+
+      const header = sheet.getRange(`${action.before}1`);
+      header.values = [[action.header]];
+      applyHeaderStyle(header, headerStyleFrom(ref ? snapshotHeaderFormat(ref) : null));
+    }
     await ctx.sync();
   });
 

@@ -259,6 +259,21 @@ async function refresh() {
 function bind() {
   $("openExcel").addEventListener("click", () => window.eal.actions.openExcel());
   $("revealModels").addEventListener("click", () => window.eal.actions.revealModels());
+  $("openRepo").addEventListener("click", () => window.eal.actions.openRepo());
+  $("checkUpdates").addEventListener("click", async () => {
+    const btn = $("checkUpdates");
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    try {
+      const info = await window.eal.actions.checkUpdates();
+      if (info.status === "update") toast(`Version ${info.latest} is available — see the tray menu to download.`);
+      else if (info.status === "current") toast("You're up to date.");
+      else toast("Couldn't check for updates — offline, or the GitHub releases page isn't public yet.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Check for updates";
+    }
+  });
 
   window.eal.onProgress((p) => {
     state.progress.set(p.id, p);

@@ -158,7 +158,7 @@ already pointing at `wef`. A Finder drag also works and is kept as a fallback.
 
 ## Testing
 
-229 tests. Alongside the ordinary coverage, there is a regression test for every finding
+242 tests. Alongside the ordinary coverage, there is a regression test for every finding
 above — including one that reads the task pane's routing table and asserts that every
 action the model can propose has an apply path, after `split_column` shipped without one.
 

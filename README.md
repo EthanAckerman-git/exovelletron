@@ -161,6 +161,15 @@ Architecture notes and the reasoning behind the trickier decisions are in
 
 ---
 
+## Updates
+
+The app checks the GitHub releases page once at launch (and whenever you click
+"Check for updates" in the panel or the menu-bar menu). When a newer version exists, the
+menu bar offers the download. The check is a single request that carries nothing but
+itself — your data never rides along.
+
+---
+
 ## Licence
 
-MIT.
+MIT. Made by **Ethan Ackerman**.
