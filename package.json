@@ -26,9 +26,10 @@
   },
   "devDependencies": {
     "@microsoft/office-js": "^1.1.110",
-    "esbuild": "^0.25.0",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.0",
+    "jsdom": "^30.0.1",
     "vitest": "^3.0.0"
   },
   "build": {
@@ -53,7 +54,14 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "target": [{ "target": "dmg", "arch": ["arm64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
       "icon": "assets/icon.icns",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
@@ -65,8 +73,17 @@
     "dmg": {
       "title": "Exovelletron",
       "contents": [
-        { "x": 140, "y": 200, "type": "file" },
-        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     }
   }

@@ -143,8 +143,35 @@ html, body { height: 100%; overflow: hidden; }
   overflow-wrap: anywhere;
 }
 
+/* ---- Markdown inside an assistant reply -----------------------------------
+   Tuned for a 320px column: tight vertical rhythm, no element wider than the
+   pane, and anything that can't shrink scrolls inside its own box. */
+
+.turn--assistant .turn__body > :first-child { margin-top: 0; }
+.turn--assistant .turn__body > :last-child { margin-bottom: 0; }
+
 .turn--assistant .turn__body p { margin: 0 0 0.7em; }
-.turn--assistant .turn__body p:last-child { margin-bottom: 0; }
+
+.turn--assistant .turn__body h4,
+.turn--assistant .turn__body h5,
+.turn--assistant .turn__body h6 {
+  margin: 1.1em 0 0.4em;
+  font-size: 13px;
+  font-weight: 640;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+.turn--assistant .turn__body h5 { font-size: 12.5px; color: var(--ink-soft); }
+.turn--assistant .turn__body h6 { font-size: 12px; color: var(--ink-soft); }
+
+.turn--assistant .turn__body ul,
+.turn--assistant .turn__body ol {
+  margin: 0 0 0.7em;
+  padding-left: 1.25em;
+}
+.turn--assistant .turn__body li { margin-bottom: 0.28em; }
+.turn--assistant .turn__body li::marker { color: var(--ink-faint); }
+.turn--assistant .turn__body ol li::marker { font-family: var(--font-mono); font-size: 11.5px; }
 
 .turn--assistant .turn__body code {
   font-family: var(--font-mono);
@@ -154,6 +181,58 @@ html, body { height: 100%; overflow: hidden; }
   border-radius: var(--radius-sm);
   padding: 0.5px 4px;
   overflow-wrap: anywhere;
+}
+
+.turn--assistant .turn__body pre {
+  margin: 0 0 0.7em;
+  padding: calc(var(--step) * 2);
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+/* The <pre> already provides the frame; the inner code must not draw a second one. */
+.turn--assistant .turn__body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.turn--assistant .turn__body blockquote {
+  margin: 0 0 0.7em;
+  padding: calc(var(--step)) 0 calc(var(--step)) calc(var(--step) * 2);
+  border-left: 2px solid var(--rule-strong);
+  color: var(--ink-soft);
+}
+
+.turn--assistant .turn__body hr {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 1em 0;
+}
+
+.turn--assistant .turn__body strong { font-weight: 620; }
+
+.md-table { overflow-x: auto; margin: 0 0 0.7em; }
+.md-table table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: 100%;
+}
+.md-table th,
+.md-table td {
+  border: 1px solid var(--rule);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+.md-table th {
+  background: var(--surface-sunk);
+  font-weight: 600;
+  color: var(--ink-soft);
 }
 
 .turn--error .turn__body {

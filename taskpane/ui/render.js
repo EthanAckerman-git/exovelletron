@@ -5,6 +5,7 @@
  * output is untrusted text and must never be parsed as markup.
  */
 import { offsetFormula } from "./formula.js";
+import { renderMarkdown } from "./markdown.js";
 
 export const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -41,25 +42,12 @@ const columnLetter = (index) => {
 };
 
 /**
- * Renders assistant prose. Supports only paragraphs and `inline code`, which is all the
- * model is asked to produce — no HTML is ever interpreted.
+ * Renders an assistant reply as Markdown.
+ *
+ * Built entirely from DOM nodes — model output is untrusted and is never parsed as HTML.
  */
 export function renderProse(container, text) {
-  container.textContent = "";
-  for (const block of text.split(/\n{2,}/)) {
-    if (!block.trim()) continue;
-    const p = el("p");
-    // Split on backtick spans, keeping the delimiters' contents.
-    const parts = block.split(/(`[^`]+`)/g);
-    for (const part of parts) {
-      if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
-        p.appendChild(el("code", null, part.slice(1, -1)));
-      } else if (part) {
-        p.appendChild(document.createTextNode(part));
-      }
-    }
-    container.appendChild(p);
-  }
+  renderMarkdown(container, text);
 }
 
 /** The mini-spreadsheet: the point is that approving a change means seeing it. */

@@ -19,6 +19,32 @@ function turn(role, text) {
 
 const noop = { onApply: async () => ({ undo: async () => {} }), onDismiss: () => {} };
 
+turn("user", "What's in this sheet and what should I fix?");
+turn("assistant", [
+  "## What this sheet holds",
+  "",
+  "Five columns of Q3 sales, one row per rep:",
+  "",
+  "- **Region** and **Rep** identify the sale",
+  "- `Units` and `Unit Price` are the inputs",
+  "- **Revenue** is empty and should be calculated",
+  "",
+  "### Problems I found",
+  "",
+  "| Column | Issue | Rows |",
+  "| --- | --- | --- |",
+  "| Revenue | Empty | 500 |",
+  "| Unit Price | Text instead of number | 3 |",
+  "",
+  "The fix for Revenue is a single formula:",
+  "",
+  "```excel",
+  "=IFERROR(C2*D2,\"\")",
+  "```",
+  "",
+  "> Guarding with IFERROR keeps blank rows from showing #VALUE!",
+].join("\n"));
+
 turn("user", "Fill the Revenue column with units times unit price.");
 const a1 = turn("assistant", "Revenue is units multiplied by unit price, so a formula keeps it correct as the data changes.");
 a1.turn.appendChild(buildProposal({
