@@ -150,10 +150,15 @@ already pointing at `wef`. A Finder drag also works and is kept as a fallback.
   something tried.
 - Office.js is vendored and served locally; its telemetry sink is replaced with a no-op,
   making telemetry structurally impossible rather than merely disabled.
+- Web search is **opt-in and off by default**. When the user enables it (the globe in the
+  pane), the model gains one data tool that sends the search query — nothing else — to
+  DuckDuckGo's HTML endpoint (chosen because it needs no API key or account) and gets
+  back result titles, URLs, and snippets. No pages are fetched, and turning it off
+  removes the tool entirely. The default configuration transmits nothing, ever.
 
 ## Testing
 
-216 tests. Alongside the ordinary coverage, there is a regression test for every finding
+229 tests. Alongside the ordinary coverage, there is a regression test for every finding
 above — including one that reads the task pane's routing table and asserts that every
 action the model can propose has an apply path, after `split_column` shipped without one.
 

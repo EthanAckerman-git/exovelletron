@@ -14,6 +14,7 @@ let history = null;
 const state = {
   ready: false,
   busy: false,
+  webSearch: false,
   cancelStream: null,
   sheetContext: null,
   hasTurns: false,
@@ -107,7 +108,7 @@ async function restoreAfterReload() {
 }
 
 function cacheDom() {
-  for (const id of ["dot", "modelName", "thread", "input", "send", "selAddr", "selMeta", "settings", "newChat", "historyBtn"]) {
+  for (const id of ["dot", "modelName", "thread", "input", "send", "selAddr", "selMeta", "webBtn", "newChat", "historyBtn"]) {
     dom[id] = document.getElementById(id);
   }
   history = createHistoryPanel({ onOpen: loadConversation });
@@ -137,7 +138,7 @@ function bindEvents() {
   dom.send.addEventListener("click", () => (state.busy ? stop() : submit()));
   dom.newChat.addEventListener("click", newConversation);
   dom.historyBtn.addEventListener("click", () => history.toggle());
-  dom.settings.addEventListener("click", openControlPanel);
+  dom.webBtn.addEventListener("click", toggleWebSearch);
 
   Office.context.document.addHandlerAsync(
     Office.EventType.DocumentSelectionChanged,
@@ -151,12 +152,40 @@ function autoGrow() {
   dom.send.disabled = !state.busy && (!dom.input.value.trim() || !state.ready);
 }
 
+/* -------------------------------------------------------------------- web search */
+
+/**
+ * Reflect the web-search preference on the globe button. Off is the default and the
+ * promise; when it is on, the button says plainly what leaves the machine.
+ */
+function renderWebSearch(on) {
+  state.webSearch = on === true;
+  dom.webBtn.classList.toggle("status__btn--on", state.webSearch);
+  dom.webBtn.title = state.webSearch
+    ? "Web search is ON — the AI can send search queries to DuckDuckGo. Click to turn off."
+    : "Web search is off — nothing leaves this Mac. Click to let the AI search the web.";
+  dom.webBtn.setAttribute("aria-pressed", String(state.webSearch));
+}
+
+async function toggleWebSearch() {
+  const want = !state.webSearch;
+  renderWebSearch(want); // optimistic; corrected below if the save fails
+  try {
+    const { webSearch } = await api.setSettings({ webSearch: want });
+    renderWebSearch(webSearch);
+  } catch (err) {
+    renderWebSearch(!want);
+    toastError(`Could not change web search: ${err.message}`);
+  }
+}
+
 /* ------------------------------------------------------------------------ status */
 
 function setEngineState(status) {
   const engineState = status?.engine?.state ?? "idle";
   dom.dot.dataset.state = engineState;
   state.ready = engineState === "ready";
+  renderWebSearch(status?.webSearch);
 
   if (status?.model) {
     dom.modelName.textContent = status.model.name;
@@ -170,7 +199,9 @@ function setEngineState(status) {
     ? "Ask about this sheet…"
     : engineState === "loading"
       ? "Starting the model…"
-      : "Open Exovelletron to set up a model";
+      : engineState === "generating"
+        ? "Working…"
+        : "Open Exovelletron to set up a model";
   autoGrow();
 
   if (!state.ready && !state.hasTurns) showSetupNotice(status);
@@ -442,6 +473,20 @@ async function submit() {
         text += chunk;
         renderProse(answer.body, text);
         answer.body.lastElementChild?.appendChild(caret);
+        scrollToEnd();
+      },
+      // Trust needs visibility: whenever the model actually reaches the web, the
+      // transcript says so, with the exact query that was sent.
+      onSearch: ({ query }) => {
+        caret.remove();
+        if (firstToken) {
+          answer.body.textContent = "";
+          firstToken = false;
+        }
+        const chip = el("div", "search-chip");
+        chip.appendChild(el("span", "search-chip__icon", "⌕"));
+        chip.appendChild(el("span", null, `Searched the web for “${query}”`));
+        answer.turn.appendChild(chip);
         scrollToEnd();
       },
       onAction: (action) => {

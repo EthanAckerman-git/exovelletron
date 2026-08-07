@@ -25,6 +25,38 @@ const indexToColumn = (index) => {
 };
 
 /**
+ * The fill for header rows this app writes. Writing a plain-text header above a table
+ * it just built looks unfinished, and expecting the model to remember to format it is
+ * hoping, not engineering — so the app styles the header itself, every time.
+ */
+const HEADER_FILL = "#E9E9F4";
+
+/** Capture a header row's look so Undo can put it back exactly. */
+const loadHeaderFormat = (range) => {
+  range.load(["formulas"]);
+  range.format.fill.load("color");
+  range.format.font.load("bold");
+};
+
+const snapshotHeaderFormat = (range) => ({
+  formulas: range.formulas,
+  fill: range.format.fill.color,
+  bold: range.format.font.bold,
+});
+
+const styleHeader = (range) => {
+  range.format.font.bold = true;
+  range.format.fill.color = HEADER_FILL;
+};
+
+const restoreHeader = (range, saved) => {
+  range.formulas = saved.formulas;
+  range.format.font.bold = saved.bold;
+  if (saved.fill) range.format.fill.color = saved.fill;
+  else range.format.fill.clear();
+};
+
+/**
  * @param {object} action  a validated transform_column action
  * @param {object} handlers { onProgress({done,total,sample}), onPhase(name) }
  * @returns {Promise<{undo:Function, message:string, failed:number[]}>}
@@ -48,9 +80,9 @@ export async function runTransform(action, handlers = {}) {
     const range = sheet.getRange(action.address);
     range.load(["formulas"]);
     const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
-    header?.load(["formulas"]);
+    if (header) loadHeaderFormat(header);
     await ctx.sync();
-    return { body: range.formulas, header: header ? header.formulas : null };
+    return { body: range.formulas, header: header ? snapshotHeaderFormat(header) : null };
   });
 
   handlers.onPhase?.("transforming");
@@ -79,7 +111,11 @@ export async function runTransform(action, handlers = {}) {
     sheet.getRange(action.address).values = action.columns
       ? results.map((row) => (Array.isArray(row) ? row : [row]))
       : results.map((v) => [v]);
-    if (action.headerAddress) sheet.getRange(action.headerAddress).values = [action.columns];
+    if (action.headerAddress) {
+      const header = sheet.getRange(action.headerAddress);
+      header.values = [action.columns];
+      styleHeader(header);
+    }
     await ctx.sync();
   });
 
@@ -93,7 +129,7 @@ export async function runTransform(action, handlers = {}) {
         const sheet = targetSheet(ctx, action.sheet);
         sheet.getRange(action.address).formulas = snapshot.body;
         if (action.headerAddress && snapshot.header) {
-          sheet.getRange(action.headerAddress).formulas = snapshot.header;
+          restoreHeader(sheet.getRange(action.headerAddress), snapshot.header);
         }
         await ctx.sync();
       });
@@ -156,9 +192,9 @@ export async function runExtract(action, handlers = {}) {
     const range = sheet.getRange(address);
     range.load(["formulas"]);
     const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
-    header?.load(["formulas"]);
+    if (header) loadHeaderFormat(header);
     await ctx.sync();
-    return { body: range.formulas, header: header ? header.formulas : null };
+    return { body: range.formulas, header: header ? snapshotHeaderFormat(header) : null };
   });
 
   handlers.onPhase?.("writing");
@@ -166,7 +202,11 @@ export async function runExtract(action, handlers = {}) {
   await Excel.run(async (ctx) => {
     const sheet = targetSheet(ctx, action.sheet);
     sheet.getRange(address).values = records;
-    if (action.headerAddress) sheet.getRange(action.headerAddress).values = [action.columns];
+    if (action.headerAddress) {
+      const header = sheet.getRange(action.headerAddress);
+      header.values = [action.columns];
+      styleHeader(header);
+    }
     await ctx.sync();
   });
 
@@ -182,7 +222,7 @@ export async function runExtract(action, handlers = {}) {
         const sheet = targetSheet(ctx, action.sheet);
         sheet.getRange(address).formulas = snapshot.body;
         if (action.headerAddress && snapshot.header) {
-          sheet.getRange(action.headerAddress).formulas = snapshot.header;
+          restoreHeader(sheet.getRange(action.headerAddress), snapshot.header);
         }
         await ctx.sync();
       });

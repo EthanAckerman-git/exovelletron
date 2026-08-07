@@ -22,8 +22,9 @@ Everything runs on your own Mac. No account, no API key, no internet after setup
 | **Split messy columns** | One cell holding `"NAME 123 MAIN ST","CITY","ST","12345"`? It breaks that into proper named columns. |
 | **Rebuild truly messy data** | Records with fields stacked down separate rows, or a dozen records crammed into one cell? It reads the whole range in context and rebuilds it as a clean table — one row per record. |
 | **Clean up values** | Standardise addresses to USPS format, fix inconsistent dates, normalise names — across **every row**, not just the ones on screen. |
-| **Format the sheet** | Bold headers, fills, currency and date formats. |
+| **Format the sheet** | Bold headers, fills, currency and date formats. Tables the AI writes get their header row styled automatically. |
 | **Find problems** | Blanks, duplicates, values that look wrong. |
+| **Search the web** *(optional)* | Off by default. Click the globe in the pane to let the AI send search queries to DuckDuckGo — results come back as titles and snippets, and that is the only thing that ever leaves your Mac. |
 
 **Nothing is written until you click Apply**, and every change has an **Undo**.
 

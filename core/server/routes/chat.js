@@ -43,6 +43,9 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
 
     const onAction = (action) => res.write(sseFrame("action", action));
     engine.on("action", onAction);
+    // Surfaced so the pane can show exactly when — and for what — the model searched.
+    const onSearch = (payload) => res.write(sseFrame("search", payload));
+    engine.on("search", onSearch);
 
     try {
       const result = await engine.chat({
@@ -55,6 +58,7 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
       res.write(sseFrame("error", { message: err.message || "Generation failed" }));
     } finally {
       engine.off("action", onAction);
+      engine.off("search", onSearch);
       req.off("close", onClose);
       res.end();
     }

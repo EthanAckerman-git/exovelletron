@@ -125,6 +125,15 @@ async function startServer() {
       models,
       history,
       appInfo: { version: app.getVersion() },
+      // Lets the pane read and flip the web-search preference directly.
+      settings: {
+        get: () => config,
+        set: async (patch) => {
+          config = await saveConfig(patch, paths);
+          engine.updateConfig({ webSearch: config.webSearch });
+          return config;
+        },
+      },
     });
     try {
       await instance.listen();
@@ -156,6 +165,7 @@ async function startEngine() {
     sheetContextTokens: config.sheetContextTokens,
     temperature: config.temperature,
     maxTokens: config.maxTokens,
+    webSearch: config.webSearch,
   });
   await engine.load(id, models.pathFor(id));
 }
@@ -275,6 +285,7 @@ function registerIpc() {
       temperature: config.temperature,
       maxTokens: config.maxTokens,
       contextTokens: config.contextTokens,
+      webSearch: config.webSearch,
     });
     return config;
   });
@@ -294,6 +305,7 @@ async function boot() {
       sheetContextTokens: config.sheetContextTokens,
       temperature: config.temperature,
       maxTokens: config.maxTokens,
+      webSearch: config.webSearch,
     },
   });
 

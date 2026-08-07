@@ -28,6 +28,9 @@ export const DEFAULTS = Object.freeze({
   maxTokens: 1536,
   launchAtLogin: false,
   setupCompleted: false,
+  // Off by default: the app's promise is that nothing leaves this Mac. When the user
+  // turns it on, only search queries are transmitted — see core/search.js.
+  webSearch: false,
 });
 
 export function createPaths(home = os.homedir()) {

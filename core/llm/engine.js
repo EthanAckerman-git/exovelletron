@@ -47,15 +47,19 @@ export class Engine extends EventEmitter {
   #generation = null; // { controller }
   #config;
 
+  #searchWeb;
+
   /**
    * @param {object} opts
    * @param {() => Promise<any>} [opts.importLlama] injectable for tests
-   * @param {object} opts.config  { contextTokens, temperature, maxTokens }
+   * @param {(query:string) => Promise<string>} [opts.searchWeb] injectable for tests
+   * @param {object} opts.config  { contextTokens, temperature, maxTokens, webSearch }
    */
-  constructor({ importLlama = () => import("node-llama-cpp"), config = {} } = {}) {
+  constructor({ importLlama = () => import("node-llama-cpp"), searchWeb = null, config = {} } = {}) {
     super();
     this.#llamaModule = importLlama;
-    this.#config = { contextTokens: 8192, temperature: 0.3, maxTokens: 1536, thinking: false, ...config };
+    this.#searchWeb = searchWeb ?? (async (q) => (await import("../search.js")).searchWeb(q));
+    this.#config = { contextTokens: 8192, temperature: 0.3, maxTokens: 1536, thinking: false, webSearch: false, ...config };
   }
 
   get state() { return this.#state; }
@@ -424,6 +428,29 @@ export class Engine extends EventEmitter {
             );
           }
           return `Rejected: ${result.error}. Fix the arguments and try again.`;
+        },
+      });
+    }
+
+    // A data tool, not a proposal: results flow straight back into the turn. Only
+    // offered when the user has explicitly enabled web access — by default this app
+    // sends nothing off the machine.
+    if (this.#config.webSearch) {
+      fns.search_web = defineChatSessionFunction({
+        description:
+          "Search the web and get back result titles, URLs, and snippets. Use when the user asks " +
+          "about current events, prices, external facts, or anything not in the workbook. " +
+          "Summarise what you learn and cite the source name.",
+        params: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "A concise search query." },
+          },
+          required: ["query"],
+        },
+        handler: async ({ query }) => {
+          this.emit("search", { query });
+          return await this.#searchWeb(String(query ?? ""));
         },
       });
     }

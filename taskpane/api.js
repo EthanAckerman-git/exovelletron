@@ -37,6 +37,7 @@ export const selectModel = (id) => request("/api/models/select", { method: "POST
 export const downloadModel = (id) => request("/api/models/download", { method: "POST", body: JSON.stringify({ id }) });
 export const resetConversation = () => request("/api/engine/reset", { method: "POST" });
 export const abortChat = () => request("/api/chat/abort", { method: "POST" });
+export const setSettings = (patch) => request("/api/settings", { method: "POST", body: JSON.stringify(patch) });
 
 /**
  * Stream a chat turn.
@@ -96,6 +97,7 @@ export function streamChat(body, handlers) {
 
           if (event === "token") handlers.onToken?.(payload.text);
           else if (event === "action") handlers.onAction?.(payload);
+          else if (event === "search") handlers.onSearch?.(payload);
           else if (event === "done") handlers.onDone?.(payload);
           else if (event === "error") handlers.onError?.(payload.message);
         }

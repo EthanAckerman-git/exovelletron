@@ -53,8 +53,10 @@ export async function readJsonBody(req, { limit = 4_000_000 } = {}) {
  * @param {object} deps.engine     inference engine (see core/llm/engine.js)
  * @param {object} deps.models     model store (see core/models/store.js)
  * @param {object} [deps.appInfo]  { version }
+ * @param {{get:() => object, set:(patch:object) => Promise<object>}} [deps.settings]
+ *   user preferences the pane may read and change (currently just webSearch)
  */
-export function createAppServer({ credentials, port, engine, models, history, appInfo = {} }) {
+export function createAppServer({ credentials, port, engine, models, history, appInfo = {}, settings = null }) {
   const token = mintToken();
   /**
    * The port actually in use. It only diverges from the requested one when binding to
@@ -66,7 +68,7 @@ export function createAppServer({ credentials, port, engine, models, history, ap
   /** @type {Map<string, (req, res, ctx) => Promise<boolean|void>>} */
   const routes = new Map();
 
-  const ctx = { engine, models, history, token, get port() { return boundPort; }, appInfo, json, readJsonBody };
+  const ctx = { engine, models, history, token, get port() { return boundPort; }, appInfo, settings, json, readJsonBody };
 
   registerStatusRoutes(routes, ctx);
   registerChatRoutes(routes, ctx);

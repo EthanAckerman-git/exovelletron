@@ -78,12 +78,14 @@ beforeAll(async () => {
     try { await readFile(target); } catch { await writeFile(target, contents, "utf8"); }
   }
 
+  let prefs = { webSearch: false };
   server = createAppServer({
     credentials: { key: await readFile(f.key), cert: await readFile(f.cert) },
     port: 0,
     engine: new StubEngine(),
     models: stubModels,
     appInfo: { version: "test" },
+    settings: { get: () => prefs, set: async (patch) => (prefs = { ...prefs, ...patch }) },
   });
   port = await server.listen();
   token = server.token;
@@ -163,6 +165,28 @@ describe("local server", () => {
 
   it("rejects an empty message", async () => {
     const res = await call(port, "/api/chat", { method: "POST", headers: auth(), body: JSON.stringify({ message: "  " }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("reports web search off by default and lets the pane flip it", async () => {
+    let status = JSON.parse((await call(port, "/api/status", { headers: auth() })).text);
+    expect(status.webSearch).toBe(false);
+
+    const on = await call(port, "/api/settings", {
+      method: "POST", headers: auth(), body: JSON.stringify({ webSearch: true }),
+    });
+    expect(JSON.parse(on.text)).toMatchObject({ ok: true, webSearch: true });
+
+    status = JSON.parse((await call(port, "/api/status", { headers: auth() })).text);
+    expect(status.webSearch).toBe(true);
+
+    await call(port, "/api/settings", { method: "POST", headers: auth(), body: JSON.stringify({ webSearch: false }) });
+  });
+
+  it("rejects a non-boolean web search setting", async () => {
+    const res = await call(port, "/api/settings", {
+      method: "POST", headers: auth(), body: JSON.stringify({ webSearch: "yes" }),
+    });
     expect(res.status).toBe(400);
   });
 
