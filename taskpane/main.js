@@ -162,8 +162,8 @@ function renderWebSearch(on) {
   state.webSearch = on === true;
   dom.webBtn.classList.toggle("status__btn--on", state.webSearch);
   dom.webBtn.title = state.webSearch
-    ? "Web search is ON — the AI can send search queries to DuckDuckGo. Click to turn off."
-    : "Web search is off — nothing leaves this Mac. Click to let the AI search the web.";
+    ? "Web access is ON — the AI can send search queries to DuckDuckGo and open pages you link. Click to turn off."
+    : "Web access is off — nothing leaves this Mac. Click to let the AI search the web and read linked pages.";
   dom.webBtn.setAttribute("aria-pressed", String(state.webSearch));
 }
 
@@ -486,6 +486,26 @@ async function submit() {
         const chip = el("div", "search-chip");
         chip.appendChild(el("span", "search-chip__icon", "⌕"));
         chip.appendChild(el("span", null, `Searched the web for “${query}”`));
+        answer.turn.appendChild(chip);
+        scrollToEnd();
+      },
+      onFetch: ({ url }) => {
+        caret.remove();
+        if (firstToken) {
+          answer.body.textContent = "";
+          firstToken = false;
+        }
+        // Show where the model went, in the shortest form still worth trusting:
+        // the site, plus a trimmed path when there is one.
+        let where = url;
+        try {
+          const u = new URL(url);
+          const trail = u.pathname.length > 1 ? u.pathname.replace(/\/$/, "") : "";
+          where = u.hostname + (trail.length > 24 ? `${trail.slice(0, 24)}…` : trail);
+        } catch { /* show it raw */ }
+        const chip = el("div", "search-chip");
+        chip.appendChild(el("span", "search-chip__icon", "⧉"));
+        chip.appendChild(el("span", null, `Opened ${where}`));
         answer.turn.appendChild(chip);
         scrollToEnd();
       },

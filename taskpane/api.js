@@ -98,6 +98,7 @@ export function streamChat(body, handlers) {
           if (event === "token") handlers.onToken?.(payload.text);
           else if (event === "action") handlers.onAction?.(payload);
           else if (event === "search") handlers.onSearch?.(payload);
+          else if (event === "fetch") handlers.onFetch?.(payload);
           else if (event === "done") handlers.onDone?.(payload);
           else if (event === "error") handlers.onError?.(payload.message);
         }

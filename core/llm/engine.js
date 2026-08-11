@@ -12,7 +12,8 @@
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import { ACTION_SPECS, validateAction, lastRowOf } from "./actions.js";
-import { SYSTEM_PROMPT, buildUserTurn } from "./prompt.js";
+import { SYSTEM_PROMPT, buildUserTurn, CHARS_PER_TOKEN } from "./prompt.js";
+import { getModel } from "../models/catalog.js";
 
 /** @typedef {"idle"|"loading"|"ready"|"generating"|"error"} EngineState */
 
@@ -48,17 +49,20 @@ export class Engine extends EventEmitter {
   #config;
 
   #searchWeb;
+  #fetchPage;
 
   /**
    * @param {object} opts
    * @param {() => Promise<any>} [opts.importLlama] injectable for tests
    * @param {(query:string) => Promise<string>} [opts.searchWeb] injectable for tests
+   * @param {(url:string, opts?:object) => Promise<string>} [opts.fetchPage] injectable for tests
    * @param {object} opts.config  { contextTokens, temperature, maxTokens, webSearch }
    */
-  constructor({ importLlama = () => import("node-llama-cpp"), searchWeb = null, config = {} } = {}) {
+  constructor({ importLlama = () => import("node-llama-cpp"), searchWeb = null, fetchPage = null, config = {} } = {}) {
     super();
     this.#llamaModule = importLlama;
     this.#searchWeb = searchWeb ?? (async (q) => (await import("../search.js")).searchWeb(q));
+    this.#fetchPage = fetchPage ?? (async (url, opts) => (await import("../fetchpage.js")).fetchPage(url, opts));
     this.#config = { contextTokens: 8192, temperature: 0.3, maxTokens: 1536, thinking: false, webSearch: false, ...config };
   }
 
@@ -183,14 +187,19 @@ export class Engine extends EventEmitter {
    * real one.
    *
    * Non-Qwen models fall through to node-llama-cpp's own template detection.
+   *
+   * The wrapper choice comes from the catalog entry when the id is known; the regex
+   * remains only as a fallback for ids the catalog has never heard of.
    */
   #chatWrapperFor(modelId, mod) {
     if (this.#config.thinking) return {};
-    if (!/^qwen/i.test(modelId ?? "") || !mod.QwenChatWrapper) return {};
+    const spec = getModel(modelId ?? "")?.chat;
+    const wrapper = spec?.wrapper ?? (/^qwen/i.test(modelId ?? "") ? "qwen" : null);
+    if (wrapper !== "qwen" || !mod.QwenChatWrapper) return {};
     return {
       chatWrapper: new mod.QwenChatWrapper({
         thoughts: "discourage",
-        variation: /qwen3\.5/i.test(modelId) ? "3.5" : "3",
+        variation: spec?.variation ?? (/qwen3\.5/i.test(modelId ?? "") ? "3.5" : "3"),
       }),
     };
   }
@@ -451,6 +460,27 @@ export class Engine extends EventEmitter {
         handler: async ({ query }) => {
           this.emit("search", { query });
           return await this.#searchWeb(String(query ?? ""));
+        },
+      });
+
+      fns.fetch_page = defineChatSessionFunction({
+        description:
+          "Open one web page and read its text. Use when the user pastes a link, or when a " +
+          "search result clearly holds the answer and the snippet is not enough. Quote or " +
+          "summarise what the page says and name the site.",
+        params: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "The full http(s) address of the page to open." },
+          },
+          required: ["url"],
+        },
+        handler: async ({ url }) => {
+          this.emit("fetch", { url: String(url ?? "") });
+          // A page may only take a quarter of the window: the sheet, the question,
+          // and the answer still have to fit alongside it.
+          const maxChars = Math.floor(this.#config.contextTokens * CHARS_PER_TOKEN * 0.25);
+          return await this.#fetchPage(String(url ?? ""), { maxChars });
         },
       });
     }

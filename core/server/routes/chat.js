@@ -43,9 +43,12 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
 
     const onAction = (action) => res.write(sseFrame("action", action));
     engine.on("action", onAction);
-    // Surfaced so the pane can show exactly when — and for what — the model searched.
+    // Surfaced so the pane can show exactly when — and for what — the model searched
+    // or opened a page.
     const onSearch = (payload) => res.write(sseFrame("search", payload));
     engine.on("search", onSearch);
+    const onFetch = (payload) => res.write(sseFrame("fetch", payload));
+    engine.on("fetch", onFetch);
 
     try {
       const result = await engine.chat({
@@ -59,6 +62,7 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
     } finally {
       engine.off("action", onAction);
       engine.off("search", onSearch);
+      engine.off("fetch", onFetch);
       req.off("close", onClose);
       res.end();
     }
