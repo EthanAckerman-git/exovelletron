@@ -3,6 +3,7 @@
  */
 import * as api from "./api.js";
 import { readSheetContext, describeSelection } from "./sheet/context.js";
+import { readRangeForModel } from "./sheet/reader.js";
 import { applyAction, revealRange } from "./sheet/apply.js";
 import { runTransform, runExtract } from "./sheet/transform.js";
 import { el, buildTurn, buildProposal, armProposals, renderProse } from "./ui/render.js";
@@ -451,6 +452,10 @@ async function submit() {
   const answer = buildTurn("assistant");
   const pending = el("div", "thinking");
   pending.append(el("i"), el("i"), el("i"));
+  // Live narration beside the dots: which range is being read, what is being searched.
+  // The dots stay up through tool activity and only yield to the streamed answer.
+  const pendingVerb = el("span", "thinking__label");
+  pending.appendChild(pendingVerb);
   answer.body.appendChild(pending);
   dom.thread.appendChild(answer.turn);
   scrollToEnd();
@@ -461,6 +466,17 @@ async function submit() {
   let text = "";
   let firstToken = true;
   const caret = el("span", "caret");
+
+  const setVerb = (verb) => { pendingVerb.textContent = verb; };
+  // Receipts live on the turn, not in the streamed body, so a re-render keeps them.
+  const appendChip = (icon, label) => {
+    caret.remove();
+    const chip = el("div", "search-chip");
+    chip.appendChild(el("span", "search-chip__icon", icon));
+    chip.appendChild(el("span", null, label));
+    answer.turn.appendChild(chip);
+    scrollToEnd();
+  };
 
   state.cancelStream = api.streamChat(
     { message, sheetContext: state.sheetContext },
@@ -475,26 +491,13 @@ async function submit() {
         answer.body.lastElementChild?.appendChild(caret);
         scrollToEnd();
       },
-      // Trust needs visibility: whenever the model actually reaches the web, the
-      // transcript says so, with the exact query that was sent.
+      // Trust needs visibility: whenever the model actually reaches the web or the
+      // workbook, the transcript says so, with exactly what was asked for.
       onSearch: ({ query }) => {
-        caret.remove();
-        if (firstToken) {
-          answer.body.textContent = "";
-          firstToken = false;
-        }
-        const chip = el("div", "search-chip");
-        chip.appendChild(el("span", "search-chip__icon", "⌕"));
-        chip.appendChild(el("span", null, `Searched the web for “${query}”`));
-        answer.turn.appendChild(chip);
-        scrollToEnd();
+        setVerb("Searching the web");
+        appendChip("⌕", `Searched the web for “${query}”`);
       },
       onFetch: ({ url }) => {
-        caret.remove();
-        if (firstToken) {
-          answer.body.textContent = "";
-          firstToken = false;
-        }
         // Show where the model went, in the shortest form still worth trusting:
         // the site, plus a trimmed path when there is one.
         let where = url;
@@ -503,18 +506,22 @@ async function submit() {
           const trail = u.pathname.length > 1 ? u.pathname.replace(/\/$/, "") : "";
           where = u.hostname + (trail.length > 24 ? `${trail.slice(0, 24)}…` : trail);
         } catch { /* show it raw */ }
-        const chip = el("div", "search-chip");
-        chip.appendChild(el("span", "search-chip__icon", "⧉"));
-        chip.appendChild(el("span", null, `Opened ${where}`));
-        answer.turn.appendChild(chip);
-        scrollToEnd();
+        setVerb(`Opening ${where}`);
+        appendChip("⧉", `Opened ${where}`);
+      },
+      // The model asked to see part of the workbook. Read it, hand the cells back
+      // through the side channel, and leave an honest receipt either way.
+      onReadRequest: async ({ id, sheet, address }) => {
+        const asked = [sheet, address].filter(Boolean).join("!");
+        setVerb(`Reading ${asked}`);
+        const result = await readRangeForModel({ sheet, address });
+        api.postReadResult({ id, ...result }).catch(() => {});
+        const where = result.ok ? [result.sheet, result.address].filter(Boolean).join("!") : asked;
+        appendChip("⊞", result.ok ? `Read ${where}` : `Couldn't read ${where}`);
       },
       onAction: (action) => {
         caret.remove();
-        if (firstToken) {
-          answer.body.textContent = "";
-          firstToken = false;
-        }
+        setVerb("Proposing a change");
         // The card appears while the reply is still streaming, but its buttons stay
         // disabled until the turn ends — the engine can only do one thing at a time,
         // so an early click would just be refused as busy.
@@ -549,7 +556,11 @@ async function submit() {
         pending.remove();
         // The engine is free again, so any proposals that did arrive are usable.
         armProposals(answer.turn);
-        if (firstToken) answer.turn.remove();
+        // A turn holding receipts or proposals stays; only a truly empty one goes.
+        if (firstToken) {
+          if (answer.turn.querySelector(".search-chip, .proposal")) answer.body.remove();
+          else answer.turn.remove();
+        }
         const errorTurn = buildTurn("error");
         errorTurn.body.textContent = failure;
         dom.thread.appendChild(errorTurn.turn);

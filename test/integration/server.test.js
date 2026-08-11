@@ -37,21 +37,64 @@ class StubEngine extends EventEmitter {
   isBusy = false;
   loads = [];
   unloads = 0;
+  /** When set, chat() asks the route's readSheet for this range, like the tool would. */
+  readRequest = null;
+  lastReadResult = null;
   status() { return { state: "ready", modelId: this.modelId, error: null, contextTokens: 8192, busy: false }; }
   async memoryInfo() { return { total: 19e9, free: 12e9, used: 7e9 }; }
   async load(id, modelPath) { this.loads.push({ id, modelPath }); this.modelId = id; }
   async unload() { this.unloads += 1; this.modelId = null; }
   async resetConversation() {}
   abort() {}
-  async chat({ onToken }) {
+  async chat({ onToken, readSheet }) {
     onToken("Hello ");
     onToken("world");
     const action = { id: "a1", type: "write_formula", sheet: null, address: "A1:A2", formula: "=1", summary: "Fill 2 cells" };
     this.emit("action", action);
     this.emit("search", { query: "usps address format" });
     this.emit("fetch", { url: "https://pe.usps.com/businessmail101" });
+    if (this.readRequest && readSheet) this.lastReadResult = await readSheet(this.readRequest);
     return { text: "Hello world", actions: [action], stats: { seconds: 0.1, tokens: 2, tokensPerSecond: 20 } };
   }
+}
+
+/**
+ * POST an SSE endpoint and surface each frame as it arrives, so a test can answer a
+ * mid-stream request (the workbook read bridge) while the response is still open.
+ */
+function callSse(port, urlPath, { headers = {}, body, onEvent } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest(
+      { host: "127.0.0.1", port, path: urlPath, method: "POST", headers, rejectUnauthorized: false },
+      (res) => {
+        const events = [];
+        let buffer = "";
+        res.on("data", (chunk) => {
+          buffer += chunk.toString("utf8");
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            let event = "message";
+            const dataLines = [];
+            for (const line of frame.split("\n")) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+            }
+            if (!dataLines.length) continue;
+            const payload = JSON.parse(dataLines.join("\n"));
+            events.push({ event, payload });
+            onEvent?.(event, payload, req);
+          }
+        });
+        res.on("end", () => resolve(events));
+      },
+    );
+    // A test may destroy the request mid-stream; 'end' never fires then, 'close' does.
+    req.on("close", () => resolve([]));
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
 /**
@@ -192,6 +235,59 @@ describe("local server", () => {
 
     const done = res.text.split("event: done\ndata: ")[1].split("\n")[0];
     expect(JSON.parse(done).actions).toHaveLength(1);
+  });
+
+  it("carries a workbook read out over the stream and back through /api/chat/read", async () => {
+    serverEngine.readRequest = { sheet: "Sales", address: "A2:B3" };
+    serverEngine.lastReadResult = null;
+    const events = await callSse(port, "/api/chat", {
+      headers: auth(),
+      body: JSON.stringify({ message: "what is on the Sales sheet?" }),
+      onEvent: (event, payload) => {
+        if (event !== "read_request") return;
+        call(port, "/api/chat/read", {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            id: payload.id, ok: true, sheet: "Sales", address: "A2:B3",
+            startRow: 2, columnLetters: ["A", "B"], rows: [["x", 1], ["y", 2]],
+          }),
+        });
+      },
+    });
+    serverEngine.readRequest = null;
+
+    const readReq = events.find((e) => e.event === "read_request");
+    expect(readReq.payload).toMatchObject({ sheet: "Sales", address: "A2:B3" });
+    expect(readReq.payload.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(serverEngine.lastReadResult).toMatchObject({ ok: true, sheet: "Sales", startRow: 2, rows: [["x", 1], ["y", 2]] });
+    expect(events.at(-1).event).toBe("done");
+  });
+
+  it("404s a read answer nobody is waiting for", async () => {
+    const res = await call(port, "/api/chat/read", {
+      method: "POST", headers: auth(), body: JSON.stringify({ id: "stale", ok: true, rows: [] }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("a dropped connection unparks a pending read instead of deadlocking", async () => {
+    serverEngine.readRequest = { sheet: null, address: "A1:A5" };
+    serverEngine.lastReadResult = null;
+    await callSse(port, "/api/chat", {
+      headers: auth(),
+      body: JSON.stringify({ message: "read then vanish" }),
+      onEvent: (event, _payload, req) => {
+        if (event === "read_request") req.destroy();
+      },
+    }).catch(() => { /* the destroyed socket is the point */ });
+
+    // The close handler settles the promise; give the event loop a beat to run it.
+    for (let i = 0; i < 100 && !serverEngine.lastReadResult; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    serverEngine.readRequest = null;
+    expect(serverEngine.lastReadResult).toEqual({ ok: false, error: "the reply was cancelled" });
   });
 
   it("rejects an empty message", async () => {

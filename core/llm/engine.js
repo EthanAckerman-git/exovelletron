@@ -12,7 +12,7 @@
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import { ACTION_SPECS, validateAction, lastRowOf } from "./actions.js";
-import { SYSTEM_PROMPT, buildUserTurn, CHARS_PER_TOKEN } from "./prompt.js";
+import { SYSTEM_PROMPT, buildUserTurn, CHARS_PER_TOKEN, renderGrid } from "./prompt.js";
 import { getModel } from "../models/catalog.js";
 
 /** @typedef {"idle"|"loading"|"ready"|"generating"|"error"} EngineState */
@@ -33,6 +33,13 @@ export const isBenignBackendNoise = (message) =>
 
 /** How many invalid tool calls to tolerate in one turn before telling the model to stop. */
 export const MAX_TOOL_REJECTIONS = 4;
+
+/**
+ * How many workbook reads one turn may make. Small models sometimes loop on a tool;
+ * the budget turns that failure mode into "answer with what you have" instead of a
+ * reply that never arrives.
+ */
+export const MAX_READS_PER_TURN = 8;
 
 export class Engine extends EventEmitter {
   #llamaModule;
@@ -412,7 +419,7 @@ export class Engine extends EventEmitter {
    * validated proposal; a rejected proposal returns its reason so the model can correct
    * itself within the same turn instead of failing silently.
    */
-  #buildFunctions(defineChatSessionFunction, proposals, rejections, sheetFacts) {
+  #buildFunctions(defineChatSessionFunction, proposals, rejections, sheetFacts, readSheet) {
     const fns = {};
     for (const [name, spec] of Object.entries(ACTION_SPECS)) {
       fns[name] = defineChatSessionFunction({
@@ -437,6 +444,70 @@ export class Engine extends EventEmitter {
             );
           }
           return `Rejected: ${result.error}. Fix the arguments and try again.`;
+        },
+      });
+    }
+
+    // The workbook read tool. The engine cannot touch Excel itself — the workbook
+    // lives in the Office webview — so the handler parks on a callback the chat route
+    // wires to the task pane, and the pane answers with the cells. This is what lets
+    // the model see the whole workbook instead of only the sample it was handed.
+    if (readSheet) {
+      const reads = { count: 0 };
+      fns.read_range = defineChatSessionFunction({
+        description:
+          "Read cells from the workbook — any sheet, any range — and get their values back as a " +
+          "grid. Use it when the answer needs cells you cannot already see: another sheet, rows " +
+          "past the sample, or a range the context does not show. Read the smallest range that " +
+          "answers the question.",
+        params: {
+          type: "object",
+          properties: {
+            address: { type: "string", description: 'The range in A1 notation, e.g. "A2:D40".' },
+            sheet: { type: "string", description: "Worksheet name. Omit for the active sheet." },
+          },
+          required: ["address"],
+        },
+        handler: async ({ address, sheet }) => {
+          reads.count += 1;
+          if (reads.count > MAX_READS_PER_TURN) {
+            return "Read budget exhausted for this turn — stop reading and answer from what you have already seen.";
+          }
+          const req = {
+            address: String(address ?? "").trim(),
+            sheet: typeof sheet === "string" && sheet.trim() ? sheet.trim() : null,
+          };
+          if (!req.address) return "Rejected: address is required.";
+
+          const result = await readSheet(req);
+          if (!result?.ok) {
+            return (
+              `That range could not be read: ${result?.error || "the workbook did not answer"}. ` +
+              "If the sheet name or range was wrong, correct it and try once more; otherwise answer from what you can see."
+            );
+          }
+
+          const where = [result.sheet ?? req.sheet, result.address || req.address].filter(Boolean).join("!");
+          if (!result.rows?.length) return `${where} is empty — no values there.`;
+
+          // A read may only take a quarter of the window; drop whole trailing rows
+          // rather than shredding the grid mid-line.
+          const maxChars = Math.floor(this.#config.contextTokens * CHARS_PER_TOKEN * 0.25);
+          const grid = renderGrid(result.startRow, result.columnLetters, result.rows);
+          if (grid.length <= maxChars) return `Contents of ${where}:\n\n${grid}`;
+
+          const lines = grid.split("\n");
+          const kept = [lines[0], lines[1]];
+          let size = kept[0].length + kept[1].length + 2;
+          for (let i = 2; i < lines.length && size + lines[i].length + 1 <= maxChars; i++) {
+            kept.push(lines[i]);
+            size += lines[i].length + 1;
+          }
+          const shown = kept.length - 2;
+          return (
+            `Contents of ${where} (showing the first ${shown} of ${result.rows.length} rows — ` +
+            `read a narrower range for the rest):\n\n${kept.join("\n")}`
+          );
         },
       });
     }
@@ -494,9 +565,11 @@ export class Engine extends EventEmitter {
    * @param {string} opts.message        the user's question
    * @param {object} [opts.sheetContext] worksheet context from the task pane
    * @param {(chunk:string) => void} [opts.onToken] streamed text
+   * @param {(req:{sheet:string|null,address:string}) => Promise<object>} [opts.readSheet]
+   *        answers a mid-turn workbook read; without it the read_range tool is absent
    * @returns {Promise<{text:string, actions:object[], stats:object}>}
    */
-  async chat({ message, sheetContext, onToken }) {
+  async chat({ message, sheetContext, onToken, readSheet }) {
     if (this.#state !== "ready" || !this.#session) {
       throw new Error(this.#state === "loading" ? "The model is still loading." : "No model is loaded.");
     }
@@ -524,7 +597,7 @@ export class Engine extends EventEmitter {
         // Belt and braces alongside the wrapper's "discourage": even if the model opens
         // a thought block, it cannot spend the reply budget inside it.
         budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
-        functions: this.#buildFunctions(mod.defineChatSessionFunction, proposals, rejections, { lastRow: lastRowOf(sheetContext) }),
+        functions: this.#buildFunctions(mod.defineChatSessionFunction, proposals, rejections, { lastRow: lastRowOf(sheetContext) }, readSheet),
         // Counting real tokens (not text chunks) keeps the reported rate honest — a
         // chunk can carry several tokens, or none at all.
         onResponseChunk: (chunk) => {

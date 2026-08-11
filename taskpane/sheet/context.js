@@ -16,11 +16,15 @@
  * where later rows are formatted differently from the first screenful.
  */
 export const LIMITS = {
-  sampleRows: 60,
+  // Half of what it once was: the model can now read_range any rows it is missing,
+  // and a leaner prompt is ingested noticeably faster on every single turn.
+  sampleRows: 30,
   tailRows: 15,
   columns: 40,
   selectionRows: 40,
   formulaProbeRows: 12,
+  /** How many non-active sheets the workbook map describes. */
+  mappedSheets: 11,
 };
 
 const splitAddress = (address = "") => {
@@ -74,7 +78,19 @@ export async function readSheetContext() {
       sample: null,
       selectionSample: null,
       formulas: [],
+      sheets: [],
     };
+
+    // The workbook map: shape and header row of every other sheet, so the model knows
+    // the whole workbook exists — read_range fills in whatever values it then needs.
+    const others = sheets.items
+      .filter((s) => s.name !== sheet.name)
+      .slice(0, LIMITS.mappedSheets)
+      .map((s) => {
+        const usedRange = s.getUsedRangeOrNullObject(true);
+        usedRange.load(["address", "rowCount", "columnCount", "isNullObject", "rowIndex", "columnIndex"]);
+        return { name: s.name, worksheet: s, usedRange };
+      });
 
     {
       const { ref } = splitAddress(selection.address);
@@ -86,7 +102,39 @@ export async function readSheetContext() {
       };
     }
 
-    if (used.isNullObject) return result;
+    // Resolves the other sheets' shapes (already loaded by the last sync), reads each
+    // one's first row, and fills result.sheets. One extra sync, only when needed.
+    const completeSheetMap = async () => {
+      const withData = others.filter((o) => !o.usedRange.isNullObject);
+      const headerRanges = withData.map((o) => {
+        const u = o.usedRange;
+        const header = o.worksheet.getRangeByIndexes(u.rowIndex, u.columnIndex, 1, Math.min(u.columnCount, LIMITS.columns));
+        header.load("values");
+        return header;
+      });
+      if (withData.length) await ctx.sync();
+
+      result.sheets = others.map((o) => {
+        const u = o.usedRange;
+        if (u.isNullObject) return { name: o.name, rowCount: 0 };
+        const colCount = Math.min(u.columnCount, LIMITS.columns);
+        return {
+          name: o.name,
+          address: splitAddress(u.address).ref,
+          rowCount: u.rowCount,
+          columnCount: u.columnCount,
+          columnLetters: Array.from({ length: colCount }, (_, i) => columnLetter(u.columnIndex + i)),
+          headers: headerRanges[withData.indexOf(o)]?.values?.[0]?.map(plain) ?? [],
+        };
+      });
+    };
+
+    if (used.isNullObject) {
+      // The active sheet is empty, but the rest of the workbook may not be.
+      await ctx.sync();
+      await completeSheetMap();
+      return result;
+    }
 
     const { ref: usedRef } = splitAddress(used.address);
     result.usedRange = { address: usedRef, rowCount: used.rowCount, columnCount: used.columnCount };
@@ -124,6 +172,7 @@ export async function readSheetContext() {
     }
 
     await ctx.sync();
+    await completeSheetMap();
 
     const rows = window.values.map((r) => r.map(plain));
     const looksLikeHeader =

@@ -9,10 +9,12 @@
 
 export const SYSTEM_PROMPT = `You are the assistant inside "Exovelletron", running entirely on the user's own Mac. Nothing leaves their computer.
 
-You help with one open Excel workbook. You are given a partial view of it: the user's current selection, column headers, and a sample of rows. Row counts tell you the true size — the sample is never the whole sheet.
+You help with one open Excel workbook. You are given a partial view of it: the user's current selection, column headers, a sample of rows, and a map of every sheet. Row counts tell you the true size — the sample is never the whole sheet.
 
 How to work:
 - Answer in plain language, briefly. Skip preamble and restating the question.
+- You can read any part of the workbook yourself with read_range — any sheet, any range. When the answer needs cells you cannot see (another sheet, rows past the sample, a column the sample cuts off), read them instead of guessing or asking. Read the smallest range that answers the question, never re-read cells your context already shows, and one read is usually enough.
+- The active sheet is not the whole workbook. Before answering, check the sheet map: when another sheet's name or headers match the question better — a question about stock while a sheet called Inventory has an "In stock" column — read that sheet first. Answering from the wrong sheet is worse than spending one read.
 - To change the workbook, call one of the provided tools. Each call becomes a preview the user approves or rejects, so propose the change rather than describing it.
 - Prefer a formula over computed literal values whenever the answer derives from sheet data. A formula stays correct when the data changes, and you only ever see a sample of the rows.
 - Before splitting a column, count the distinct pieces in the sample values and give each one its own output column. Leaving a piece uncovered throws it away.
@@ -57,7 +59,8 @@ export const CHARS_PER_TOKEN = 3.6;
 /** Cheap token estimate. Good enough for budgeting; no tokenizer round-trip needed. */
 export const estimateTokens = (text) => Math.ceil(text.length / CHARS_PER_TOKEN);
 
-function renderGrid(startRow, startColumnLetters, rows) {
+/** Shared with the read_range tool so on-demand reads look exactly like the sample. */
+export function renderGrid(startRow, startColumnLetters, rows) {
   if (!rows?.length) return "";
   const header = ["row", ...startColumnLetters].join(" | ");
   const divider = ["---", ...startColumnLetters.map(() => "---")].join(" | ");
@@ -77,7 +80,23 @@ export function renderSheetContext(ctx, budgetTokens = 6000) {
   const lines = [];
   lines.push(`Workbook: ${ctx.workbookName || "Untitled"}`);
   lines.push(`Active sheet: ${ctx.sheetName}`);
-  if (ctx.sheetNames?.length > 1) lines.push(`All sheets: ${ctx.sheetNames.join(", ")}`);
+  if (ctx.sheets?.length) {
+    // The whole workbook's shape, so questions about other sheets start informed
+    // rather than blind — read_range fills in any values these lines point at.
+    lines.push("Other sheets (read_range can read them):");
+    for (const s of ctx.sheets) {
+      if (!s.rowCount) {
+        lines.push(`- ${s.name} — empty`);
+        continue;
+      }
+      const cols = s.headers?.length
+        ? `; columns: ${s.headers.map((h, i) => `${s.columnLetters?.[i] ?? "?"}=${renderCell(h) || "(blank)"}`).join(", ")}`
+        : "";
+      lines.push(`- ${s.name} — ${s.address} (${s.rowCount} rows x ${s.columnCount} columns)${cols}`);
+    }
+  } else if (ctx.sheetNames?.length > 1) {
+    lines.push(`All sheets: ${ctx.sheetNames.join(", ")}`);
+  }
 
   if (ctx.usedRange) {
     lines.push(
@@ -119,7 +138,7 @@ export function renderSheetContext(ctx, budgetTokens = 6000) {
     let text = "";
     while (rows.length) {
       const grid = renderGrid(ctx.sample.startRow, ctx.sample.columnLetters, rows);
-      const note = shown < total ? ` — a sample of ${total} total rows, NOT the full sheet` : "";
+      const note = shown < total ? ` — a sample of ${total} total rows, NOT the full sheet; read_range can fetch the rest` : "";
       text = `\nSheet data (rows ${ctx.sample.startRow}–${ctx.sample.startRow + rows.length - 1}${note}):\n${grid}`;
       if (used + estimateTokens(text) <= budgetTokens) break;
       rows = rows.slice(0, Math.max(1, Math.floor(rows.length * 0.7)));

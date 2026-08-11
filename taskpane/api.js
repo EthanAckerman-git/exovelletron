@@ -99,6 +99,7 @@ export function streamChat(body, handlers) {
           else if (event === "action") handlers.onAction?.(payload);
           else if (event === "search") handlers.onSearch?.(payload);
           else if (event === "fetch") handlers.onFetch?.(payload);
+          else if (event === "read_request") handlers.onReadRequest?.(payload);
           else if (event === "done") handlers.onDone?.(payload);
           else if (event === "error") handlers.onError?.(payload.message);
         }
@@ -110,6 +111,9 @@ export function streamChat(body, handlers) {
 
   return () => controller.abort();
 }
+
+/** Answer a mid-turn workbook read the model requested over the chat stream. */
+export const postReadResult = (body) => request("/api/chat/read", { method: "POST", body: JSON.stringify(body) });
 
 /** Conversation history. */
 export const listConversations = () => request("/api/conversations");

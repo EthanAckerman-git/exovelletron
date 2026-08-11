@@ -5,7 +5,7 @@ import { buildManifest } from "../../core/setup/manifest.js";
 import { resolveWithinRoot, contentTypeFor } from "../../core/server/static.js";
 import { tokensMatch, isAllowedOrigin, authorizeApiRequest, mintToken, securityHeaders, TOKEN_HEADER } from "../../core/server/security.js";
 import { CATALOG, getModel, downloadUrl, formatBytes, fitForMachine, estimateMemoryBytes, DEFAULT_MODEL_ID } from "../../core/models/catalog.js";
-import { renderSheetContext, buildUserTurn, estimateTokens } from "../../core/llm/prompt.js";
+import { renderSheetContext, buildUserTurn, estimateTokens, renderGrid } from "../../core/llm/prompt.js";
 import { isBenignBackendNoise } from "../../core/llm/engine.js";
 
 describe("config", () => {
@@ -288,6 +288,29 @@ describe("prompt rendering", () => {
 
   it("says the rows are a sample, not the whole sheet", () => {
     expect(renderSheetContext(ctx, 6000)).toMatch(/NOT the full sheet/);
+  });
+
+  it("maps every other sheet so the model knows the whole workbook exists", () => {
+    const mapped = {
+      ...ctx,
+      sheets: [
+        {
+          name: "Inventory", address: "A1:C50", rowCount: 50, columnCount: 3,
+          columnLetters: ["A", "B", "C"], headers: ["SKU", "Name", "Qty"],
+        },
+        { name: "Notes", rowCount: 0 },
+      ],
+    };
+    const out = renderSheetContext(mapped, 6000);
+    expect(out).toContain("Other sheets (read_range can read them):");
+    expect(out).toContain("- Inventory — A1:C50 (50 rows x 3 columns); columns: A=SKU, B=Name, C=Qty");
+    expect(out).toContain("- Notes — empty");
+  });
+
+  it("renders on-demand reads with the same grid shape as the sample", () => {
+    expect(renderGrid(2, ["A", "B"], [["x", 1], ["y", 2]])).toBe(
+      "row | A | B\n--- | --- | ---\n2 | x | 1\n3 | y | 2",
+    );
   });
 
   it("respects a tight token budget", () => {
