@@ -18,6 +18,7 @@ Everything runs on your own Mac. No account, no API key, no internet after setup
 | | |
 |---|---|
 | **Explain your data** | "What am I looking at?" — it reads your selection and tells you. |
+| **See the whole workbook** | It knows every sheet's shape and reads exactly the ranges it needs — any sheet, any rows — before answering. The transcript shows a receipt for every read. |
 | **Write formulas** | Describe the calculation; it fills the column and adjusts references per row. |
 | **Split messy columns** | One cell holding `"NAME 123 MAIN ST","CITY","ST","12345"`? It breaks that into proper named columns. |
 | **Rebuild truly messy data** | Records with fields stacked down separate rows, or a dozen records crammed into one cell? It reads the whole range in context and rebuilds it as a clean table — one row per record. |
@@ -124,7 +125,7 @@ match. Switching the active model is one click in the app.
 ```
 ┌── Microsoft Excel ─────────────────┐
 │  Task pane                          │
-│    reads your selection             │
+│    reads what the AI asks to see    │
 │    shows changes before applying    │
 └──────────────┬──────────────────────┘
                │ HTTPS, localhost only
@@ -133,6 +134,10 @@ match. Switching the active model is one click in the app.
 │    local web server (127.0.0.1)     │
 │    Qwen3.5 running on the GPU       │
 └─────────────────────────────────────┘
+
+The AI works the way a person would: it starts from a summary of your workbook, then
+asks the pane for the exact cells a question needs — another sheet, rows further down —
+and the pane reads them and hands them back. Every read appears in the transcript.
 ```
 
 **Private by construction, not by promise:**
@@ -204,9 +209,10 @@ Architecture notes and the reasoning behind the trickier decisions are in
 - macOS Apple Silicon only. The core is portable; the installer, certificate trust, and
   add-in registration are macOS-specific.
 - One model loaded at a time, and the model can't be switched mid-reply.
-- The chat sees a bounded sample of your rows plus the true row count. Work that needs
-  every row — splitting, cleaning, rebuilding stacked records — runs through separate
-  whole-range paths that read everything.
+- The chat starts from a bounded sample of your rows plus a map of every sheet, and
+  reads further ranges itself when a question needs them (capped, with a receipt in the
+  transcript for each read). Work that must touch every row — splitting, cleaning,
+  rebuilding stacked records — still runs through separate whole-range paths.
 - A column split can only redistribute what you give it. If the model picks too few
   output columns, leftover text would be dropped — so the app measures how much of each
   row survived and warns you when something was lost.

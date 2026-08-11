@@ -36,7 +36,18 @@ call is validated into a normalized action; the pane renders that action as a pr
 waits. Applying snapshots the prior cell *formulas* — not values, so a formula is never
 silently flattened into a literal — which backs a one-step Undo.
 
-**Three paths for sheet work.** Chat sees a bounded sample of rows. Anything that needs
+**Reads are agentic; writes stay proposals.** The prompt opens with a map of every sheet
+and a bounded sample of the active one, and the model fetches anything else itself with a
+`read_range` tool — any sheet, any range, mid-answer. Generation runs in the Electron
+process while the workbook lives in the Office webview, and SSE is one-way, so a read is
+a round trip in two halves: the engine parks on a promise, a `read_request` frame rides
+the stream out, and the pane reads the cells (intersected with the used range, capped at
+2,000 cells) and POSTs them back to `/api/chat/read` to resolve it. Budgets bound the
+failure modes — eight reads a turn, a 20-second answer timeout, and a grid clamp at a
+quarter of the context window — so a small model that loops on the tool degrades into
+"answer with what you have", never into a hung turn.
+
+**Three paths for sheet work.** Chat sees a sample plus whatever it reads. Anything that needs
 every row (splitting a column, standardising 500 addresses) goes down a separate batched
 path that streams the whole column through the model in small chunks. Trying to serve both
 from the chat context would either blow the window or quietly operate on a sample.
@@ -123,6 +134,13 @@ uses neighbouring rows to assemble each record, and writes one row per record �
 output row count deliberately untied from the input's. Chunks are cut at blank lines so a
 stacked record is never severed, and the undo snapshot is taken after the model runs but
 before anything is written, once the exact output size is known.
+
+**`req.on("close")` is not a disconnect signal.** On current Node an `IncomingMessage`
+emits `close` when its body has been fully read — the top of the handler here — not when
+the client goes away. The "pane closed, stop burning GPU" abort listened there and so
+never fired at all. Every streaming route now watches `res.on("close")` and treats
+`writableEnded === false` as the real disconnect. Surfaced by the read-bridge
+integration test, which deadlocked without the fix.
 
 **Proposal cards must not go live while the reply is still streaming.** Tool calls arrive
 mid-stream and used to render with a clickable Apply, but the engine does one thing at a
