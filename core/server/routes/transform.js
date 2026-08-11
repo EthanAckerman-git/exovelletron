@@ -44,8 +44,10 @@ export function registerTransformRoutes(routes, { engine, json, readJsonBody }) 
 
     const controller = new AbortController();
     // A closed pane means nobody is waiting for the answer; stop burning GPU on it.
-    const onClose = () => controller.abort();
-    req.on("close", onClose);
+    // On the response, not the request: an IncomingMessage's `close` fires once its
+    // body is read — immediately here — while `res` closing unfinished means gone.
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on("close", onClose);
 
     try {
       const { results, failed, lossy } = await engine.transform({
@@ -61,7 +63,7 @@ export function registerTransformRoutes(routes, { engine, json, readJsonBody }) 
         message: err.code === "ABORTED" ? "Transform cancelled" : err.message || "Transform failed",
       }));
     } finally {
-      req.off("close", onClose);
+      res.off("close", onClose);
       res.end();
     }
   });
@@ -105,8 +107,9 @@ export function registerTransformRoutes(routes, { engine, json, readJsonBody }) 
     res.write(sseFrame("start", { total: values.length }));
 
     const controller = new AbortController();
-    const onClose = () => controller.abort();
-    req.on("close", onClose);
+    // Same disconnect signal as /api/transform: the response, guarded by writableEnded.
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on("close", onClose);
 
     try {
       const { records, failed } = await engine.extract({
@@ -122,7 +125,7 @@ export function registerTransformRoutes(routes, { engine, json, readJsonBody }) 
         message: err.code === "ABORTED" ? "Extraction cancelled" : err.message || "Extraction failed",
       }));
     } finally {
-      req.off("close", onClose);
+      res.off("close", onClose);
       res.end();
     }
   });

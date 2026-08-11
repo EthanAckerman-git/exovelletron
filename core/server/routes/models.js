@@ -46,7 +46,9 @@ export function registerModelRoutes(routes, { engine, models, json, readJsonBody
     // Some proxies and webviews drop an idle stream; a periodic comment keeps it warm.
     const keepAlive = setInterval(() => res.write(": ping\n\n"), 20000);
 
-    req.on("close", () => {
+    // The response's close is the reliable "subscriber left" signal; the request's
+    // own close can fire as soon as its (empty) body is done.
+    res.on("close", () => {
       clearInterval(keepAlive);
       for (const [name, fn] of Object.entries(handlers)) models.off(name, fn);
       engine.off("state", onEngineState);
