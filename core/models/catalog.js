@@ -2,16 +2,22 @@
  * The models offered in the app, with byte sizes and SHA-256 digests captured from the
  * Hugging Face LFS metadata so downloads can be verified rather than trusted.
  *
- * All three are Qwen3.5 in Unsloth's "UD" dynamic quantisation, which calibrates
+ * All five are Qwen3.5 in Unsloth's "UD" dynamic quantisation, which calibrates
  * per-layer bit widths and holds up noticeably better than a flat Q4_K_M at
- * effectively the same file size.
+ * effectively the same file size. Staying inside one family is deliberate: the
+ * engine's no-reasoning-loop handling (QwenChatWrapper, thoughts discouraged) is
+ * proven for Qwen3.5, and every new family would need that work re-done.
+ *
+ * `intelligence` is a 1–5 rank following the family's own published hierarchy
+ * (35B-A3B > 27B > 9B > 4B > 2B); `gain` says in one line what a step up buys.
  */
 
 export const DEFAULT_MODEL_ID = "qwen3.5-4b";
 
 /** @typedef {{id:string,name:string,repo:string,file:string,bytes:number,sha256:string,
- *   params:string,quant:string,contextTokens:number,minRamGb:number,recommendedRamGb:number,
- *   tagline:string,strengths:string[],default?:boolean}} ModelSpec */
+ *   params:string,quant:string,contextTokens:number,intelligence:number,gain:string,
+ *   tagline:string,strengths:string[],chat:{wrapper:string,variation:string},
+ *   kvBytesPerToken?:number,overheadFactor?:number,default?:boolean}} ModelSpec */
 
 /** @type {ModelSpec[]} */
 export const CATALOG = Object.freeze([
@@ -25,10 +31,11 @@ export const CATALOG = Object.freeze([
     params: "2B",
     quant: "UD-Q4_K_XL",
     contextTokens: 262144,
-    minRamGb: 4,
-    recommendedRamGb: 8,
+    intelligence: 1,
+    gain: "The smallest and quickest — fine for lookups and simple edits.",
     tagline: "Lightweight",
     strengths: ["Runs on almost any Mac", "Fastest replies", "Smallest download"],
+    chat: { wrapper: "qwen", variation: "3.5" },
   },
   {
     id: "qwen3.5-4b",
@@ -40,10 +47,11 @@ export const CATALOG = Object.freeze([
     params: "4B",
     quant: "UD-Q4_K_XL",
     contextTokens: 262144,
-    minRamGb: 8,
-    recommendedRamGb: 16,
+    intelligence: 2,
+    gain: "Noticeably more careful than 2B — the sweet spot for everyday sheet work.",
     tagline: "Recommended",
     strengths: ["Best balance of speed and accuracy", "Reliable formulas", "Strong structured output"],
+    chat: { wrapper: "qwen", variation: "3.5" },
     default: true,
   },
   {
@@ -56,10 +64,49 @@ export const CATALOG = Object.freeze([
     params: "9B",
     quant: "UD-Q4_K_XL",
     contextTokens: 262144,
-    minRamGb: 16,
-    recommendedRamGb: 24,
-    tagline: "Maximum quality",
-    strengths: ["Best at multi-step analysis", "Handles complex formulas", "Needs 16 GB+ of RAM"],
+    intelligence: 3,
+    gain: "Stronger multi-step reasoning than 4B, still comfortable on 16 GB Macs.",
+    tagline: "Strong all-rounder",
+    strengths: ["Best at multi-step analysis", "Handles complex formulas", "Still quick on Apple Silicon"],
+    chat: { wrapper: "qwen", variation: "3.5" },
+  },
+  {
+    id: "qwen3.5-27b",
+    name: "Qwen3.5 27B",
+    repo: "unsloth/Qwen3.5-27B-GGUF",
+    file: "Qwen3.5-27B-UD-Q4_K_XL.gguf",
+    bytes: 17621125024,
+    sha256: "13cb6228344898afa50d963c02ae0d991ae25094eea8837db8d0e452e91c5888",
+    params: "27B",
+    quant: "UD-Q4_K_XL",
+    contextTokens: 262144,
+    intelligence: 4,
+    gain: "A big jump in depth and accuracy over 9B — the most exacting model here, at a slower pace.",
+    tagline: "Deep reasoning",
+    strengths: ["Careful, thorough analysis", "Rarely fumbles complex requests", "Deliberate rather than fast"],
+    chat: { wrapper: "qwen", variation: "3.5" },
+    // 64 layers × 4 KV heads × (256+256) × 2 bytes, scaled by the same ratio the
+    // fitted default holds to the 4B's raw KV math (measured use ≈ 0.37 × fp16 math).
+    kvBytesPerToken: 96_000,
+  },
+  {
+    id: "qwen3.5-35b-a3b",
+    name: "Qwen3.5 35B-A3B",
+    repo: "unsloth/Qwen3.5-35B-A3B-GGUF",
+    file: "Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf",
+    bytes: 22241950336,
+    sha256: "1b0ac637dfa092bbba2793977db9485a40c4f8b42df5fe342f0076d61b66ae83",
+    params: "35B (3B active)",
+    quant: "UD-Q4_K_XL",
+    contextTokens: 262144,
+    intelligence: 5,
+    gain: "Flagship quality at real speed — only 3B of its 35B weights run per word.",
+    tagline: "Flagship",
+    strengths: ["The smartest option offered", "Fast despite its size", "Needs the most memory"],
+    chat: { wrapper: "qwen", variation: "3.5" },
+    // Mixture-of-experts: all weights load, but the KV cache is small
+    // (40 layers × 2 KV heads × 512 × 2 bytes, scaled as above).
+    kvBytesPerToken: 30_000,
   },
 ]);
 
@@ -81,14 +128,16 @@ export function formatBytes(bytes) {
  * and the KV cache for the context window.
  *
  * Deliberately an estimate, and labelled as one wherever it is shown. The weights are
- * exact (the file size); the ~20% and the per-token KV term are fitted to what Qwen3.5
- * actually consumes at these sizes rather than derived from the architecture, because
- * the layer and head counts are not in the catalog.
+ * exact (the file size); the ~20% and the default per-token KV term are fitted to what
+ * Qwen3.5 actually consumes at the original catalog sizes. Larger entries carry their
+ * own `kvBytesPerToken` derived from their GGUF headers (layer × KV-head math) scaled
+ * by the same measured-to-theoretical ratio, so the fit labels stay honest for models
+ * this machine has never loaded.
  */
 export function estimateMemoryBytes(model, contextTokens = 8192) {
   const weights = model.bytes;
-  const overhead = weights * 0.2;
-  const kvCache = contextTokens * 48_000;
+  const overhead = weights * (model.overheadFactor ?? 0.2);
+  const kvCache = contextTokens * (model.kvBytesPerToken ?? 48_000);
   return Math.round(weights + overhead + kvCache);
 }
 

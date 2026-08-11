@@ -19,7 +19,13 @@ import { ModelStore } from "../core/models/store.js";
 import { ConversationStore } from "../core/history/store.js";
 import { Engine } from "../core/llm/engine.js";
 import { getModel, DEFAULT_MODEL_ID } from "../core/models/catalog.js";
+import { recommendTiers } from "../core/models/recommend.js";
+import { detectChip } from "../core/models/machine.js";
 import { checkForUpdate, REPO_URL } from "../core/update.js";
+
+// The chip never changes while the app runs; detect once, remember forever.
+let chipPromise = null;
+const detectedChip = () => (chipPromise ??= detectChip());
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -226,7 +232,7 @@ function registerIpc() {
     engine: engine.status(),
     activeModelId: engine.modelId,
     config,
-    machine: { totalRamGb: Math.round(os.totalmem() / 1024 ** 3), arch: os.arch(), cpus: os.cpus().length, memory: await engine.memoryInfo() },
+    machine: { totalRamGb: Math.round(os.totalmem() / 1024 ** 3), arch: os.arch(), cpus: os.cpus().length, chip: (await detectedChip()).chip, memory: await engine.memoryInfo() },
     preflight: await preflight({ paths, port: activePort, modelId: config.modelId ?? DEFAULT_MODEL_ID }),
     manifestPath: manifestPath(paths),
     modelsDir: paths.modelsDir,
@@ -234,7 +240,12 @@ function registerIpc() {
 
   ipcMain.handle("models:list", async () => {
     const memory = await engine.memoryInfo();
-    return models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens });
+    const list = await models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens });
+    return {
+      models: list,
+      tiers: recommendTiers(list),
+      machine: { chip: (await detectedChip()).chip, availableBytes: memory.total },
+    };
   });
 
   ipcMain.handle("models:download", (_e, id) => {
@@ -255,13 +266,20 @@ function registerIpc() {
   ipcMain.handle("models:cancel", (_e, id) => models.cancel(id));
 
   ipcMain.handle("models:remove", async (_e, id) => {
-    if (engine.modelId === id) await engine.unload();
+    if (engine.modelId === id) {
+      if (engine.isBusy) throw new Error("That model is answering a message right now.");
+      await engine.unload();
+    }
     await models.remove(id);
+    // A config pointing at a deleted model would silently boot with nothing.
+    if (config.modelId === id) config = await saveConfig({ modelId: DEFAULT_MODEL_ID }, paths);
     return true;
   });
 
   ipcMain.handle("models:select", async (_e, id) => {
     if (!(await models.isInstalled(id))) throw new Error("That model is not downloaded yet.");
+    // Same guard and wording as the HTTP route — the two paths must not drift.
+    if (engine.isBusy) throw new Error("Finish the current message before switching models.");
     config = await saveConfig({ modelId: id }, paths);
     await engine.load(id, models.pathFor(id));
     return engine.status();

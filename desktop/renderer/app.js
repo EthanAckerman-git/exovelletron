@@ -12,7 +12,21 @@ const el = (tag, className, text) => {
 
 const CHECK = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2l2.4 2.4L9.5 3.6"/></svg>';
 
-const state = { modelsById: new Map(), progress: new Map(), busySteps: new Set(), stepErrors: new Map() };
+const state = {
+  modelsById: new Map(),
+  tiers: { fast: null, balanced: null, max: null },
+  machine: { chip: null, availableBytes: 0 },
+  progress: new Map(),
+  busySteps: new Set(),
+  stepErrors: new Map(),
+};
+
+/** Display order and copy for the recommendation tiers. */
+const TIERS = [
+  { key: "fast", label: "Fast", note: "Quick replies, light footprint" },
+  { key: "balanced", label: "Balanced", note: "Quality and speed in proportion" },
+  { key: "max", label: "Max quality", note: "The smartest this Mac can run" },
+];
 
 const gb = (n) => `${(n / 1e9).toFixed(n < 1e10 ? 2 : 1)} GB`;
 const rate = (n) => (n > 0 ? `${(n / 1e6).toFixed(1)} MB/s` : "—");
@@ -47,7 +61,42 @@ function renderStatus(app) {
   $("endpoint").textContent = app.serverError ? "offline" : `127.0.0.1:${app.port}`;
   $("version").textContent = `v${app.version}`;
   $("footPath").textContent = app.modelsDir;
-  $("ramNote").textContent = `${app.machine.totalRamGb} GB RAM · ${app.machine.arch}`;
+  const machineNote = [app.machine.chip, `${app.machine.totalRamGb} GB RAM`].filter(Boolean).join(" · ");
+  $("chipNote").textContent = machineNote;
+  // The chart's own header repeats the machine only when the recommended section —
+  // which normally carries it — has nothing to show.
+  $("ramNote").textContent = $("recommendSection").hidden ? machineNote : "";
+}
+
+/** Five dots, `n` of them lit. The chart's shorthand for relative intelligence. */
+function dotsMeter(n) {
+  const meter = el("span", "dots");
+  meter.title = `Intelligence ${n} of 5 within this family`;
+  for (let i = 1; i <= 5; i++) {
+    const dot = el("i");
+    if (i <= n) dot.dataset.on = "true";
+    meter.appendChild(dot);
+  }
+  return meter;
+}
+
+/** Switch the active model, with the button showing what is happening. */
+async function useModel(model, btn) {
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    await window.eal.models.select(model.id);
+    toast(`${model.name} is now active.`);
+  } catch (err) {
+    toast(err.message.replace(/^Error invoking remote method '[^']+':\s*/, ""));
+  }
+  await refresh();
+}
+
+async function startDownload(model, btn) {
+  btn.disabled = true;
+  await window.eal.models.download(model.id);
+  await refresh();
 }
 
 function renderSetup(app) {
@@ -77,9 +126,9 @@ function renderSetup(app) {
     const error = state.stepErrors.get(step.id);
     if (error) body.appendChild(el("p", "step__error", error));
 
-    // The model step is driven from the Models list below, so it gets no button here.
+    // The model step is driven from the recommendation cards below, so no button here.
     if (!step.done && step.id === "model") {
-      body.appendChild(el("p", "step__note", "Choose a model below to download."));
+      body.appendChild(el("p", "step__note", "Pick a recommended model below — Balanced is the safe choice."));
       li.appendChild(body);
     } else if (!step.done && step.blocked) {
       // macOS seals Excel's container against other processes, but honours a folder the
@@ -115,23 +164,75 @@ function renderSetup(app) {
   }
 }
 
+function renderPicks(app) {
+  const section = $("recommendSection");
+  const container = $("picks");
+  container.textContent = "";
+
+  const picks = TIERS
+    .map((tier) => ({ ...tier, model: state.modelsById.get(state.tiers?.[tier.key]) }))
+    .filter((p) => p.model);
+  section.hidden = picks.length === 0;
+
+  for (const { label, note, model } of picks) {
+    const card = el("div", "pick");
+    card.dataset.active = String(app.activeModelId === model.id);
+
+    const head = el("div", "pick__head");
+    head.appendChild(el("span", "pick__tier", label));
+    head.appendChild(dotsMeter(model.intelligence));
+    card.appendChild(head);
+
+    card.appendChild(el("h3", "pick__name", model.name));
+    card.appendChild(el("p", "pick__gain", model.gain));
+
+    const foot = el("div", "pick__foot");
+    if (app.activeModelId === model.id) {
+      foot.appendChild(el("span", "tag tag--active", "Active"));
+    } else if (model.downloading) {
+      const btn = el("button", "btn btn--quiet", "Downloading…");
+      btn.disabled = true;
+      foot.appendChild(btn);
+    } else if (model.installed) {
+      const use = el("button", "btn btn--primary", "Use");
+      use.addEventListener("click", () => useModel(model, use));
+      foot.appendChild(use);
+    } else {
+      const download = el("button", "btn btn--primary", `Download ${gb(model.bytes)}`);
+      download.addEventListener("click", () => startDownload(model, download));
+      foot.appendChild(download);
+    }
+    foot.appendChild(el("span", "pick__note", note));
+    card.appendChild(foot);
+
+    container.appendChild(card);
+  }
+}
+
 function renderModels(app) {
   const container = $("models");
   container.textContent = "";
 
   for (const model of state.modelsById.values()) {
     const card = el("div", "model");
+    card.dataset.id = model.id;
     card.dataset.active = String(app.activeModelId === model.id);
+    card.dataset.fit = model.fit.level;
 
     const top = el("div", "model__top");
     top.appendChild(el("h3", "model__name", model.name));
     if (app.activeModelId === model.id) top.appendChild(el("span", "tag tag--active", "Active"));
     else if (model.default) top.appendChild(el("span", "tag tag--rec", model.tagline));
     else top.appendChild(el("span", "tag", model.tagline));
+    top.appendChild(dotsMeter(model.intelligence));
     card.appendChild(top);
 
     const spec = el("p", "model__spec");
-    spec.innerHTML = `<b>${gb(model.bytes)}</b> · ${model.params} · ${model.quant} · ${(model.contextTokens / 1024).toFixed(0)}K context`;
+    // The window the engine actually runs, not the model's 256K training maximum —
+    // that number set expectations the app deliberately does not meet.
+    const runtimeK = Math.round((app.engine.contextTokens ?? 8192) / 1024);
+    spec.innerHTML = `<b>${gb(model.bytes)}</b> · ${model.params} · ${model.quant} · ${runtimeK}K context`;
+    spec.title = `${model.name} supports up to ${Math.round(model.contextTokens / 1024)}K of context; the app runs a ${runtimeK}K window for speed and memory.`;
     card.appendChild(spec);
 
     card.appendChild(el("p", "model__why", model.strengths.join(" · ")));
@@ -168,25 +269,17 @@ function renderModels(app) {
     } else if (!model.installed) {
       const label = model.partialBytes > 0 ? `Resume (${gb(model.partialBytes)} done)` : `Download ${gb(model.bytes)}`;
       const download = el("button", "btn btn--primary", label);
-      download.addEventListener("click", async () => {
+      if (model.fit.level === "too-big") {
+        // Visible so the chart stays complete, disabled so nobody downloads 17 GB
+        // of model this Mac cannot hold.
         download.disabled = true;
-        await window.eal.models.download(model.id);
-        await refresh();
-      });
+        download.title = "This model needs more memory than this Mac can offer it.";
+      }
+      download.addEventListener("click", () => startDownload(model, download));
       row.appendChild(download);
     } else if (app.activeModelId !== model.id) {
       const use = el("button", "btn btn--primary", "Use this model");
-      use.addEventListener("click", async () => {
-        use.disabled = true;
-        use.textContent = "Loading…";
-        try {
-          await window.eal.models.select(model.id);
-          toast(`${model.name} is now active.`);
-        } catch (err) {
-          toast(err.message);
-        }
-        await refresh();
-      });
+      use.addEventListener("click", () => useModel(model, use));
       row.appendChild(use);
     }
 
@@ -249,10 +342,13 @@ async function runStep(step, action = step.id) {
 /* --------------------------------------------------------------------- wiring */
 
 async function refresh() {
-  const [app, models] = await Promise.all([window.eal.getState(), window.eal.models.list()]);
-  state.modelsById = new Map(models.map((m) => [m.id, m]));
+  const [app, listing] = await Promise.all([window.eal.getState(), window.eal.models.list()]);
+  state.modelsById = new Map(listing.models.map((m) => [m.id, m]));
+  state.tiers = listing.tiers;
+  state.machine = listing.machine;
   renderStatus(app);
   renderSetup(app);
+  renderPicks(app);
   renderModels(app);
 }
 
@@ -278,9 +374,7 @@ function bind() {
   window.eal.onProgress((p) => {
     state.progress.set(p.id, p);
     // Repainting the whole list on every progress tick would be wasteful; update in place.
-    const card = [...document.querySelectorAll(".model")].find(
-      (n) => n.querySelector(".model__name")?.textContent === state.modelsById.get(p.id)?.name,
-    );
+    const card = document.querySelector(`.model[data-id="${p.id}"]`);
     if (!card) return;
     const fill = card.querySelector(".progress i");
     const meta = card.querySelector(".model__progress");

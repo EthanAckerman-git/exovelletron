@@ -181,7 +181,21 @@ describe("model catalog", () => {
       expect(m.file.endsWith(".gguf")).toBe(true);
       expect(m.repo).toMatch(/^[\w.-]+\/[\w.-]+$/);
       expect(m.strengths.length).toBeGreaterThan(0);
-      expect(m.recommendedRamGb).toBeGreaterThanOrEqual(m.minRamGb);
+      expect(m.intelligence).toBeGreaterThanOrEqual(1);
+      expect(m.intelligence).toBeLessThanOrEqual(5);
+      expect(m.gain.length).toBeGreaterThan(10);
+      expect(m.chat?.wrapper).toBe("qwen");
+      expect(m.chat?.variation).toBe("3.5");
+    }
+  });
+
+  it("ranks intelligence in the family's published order, uniquely", () => {
+    const ranks = CATALOG.map((m) => m.intelligence);
+    expect(new Set(ranks).size).toBe(CATALOG.length);
+    // Larger downloads are never rated dumber than smaller ones in this family.
+    const sorted = [...CATALOG].sort((a, b) => a.bytes - b.bytes);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i].intelligence).toBeGreaterThan(sorted[i - 1].intelligence);
     }
   });
 
@@ -210,6 +224,20 @@ describe("model catalog", () => {
     expect(need).toBeLessThan(m.bytes * 1.5 + 1e9);
     // A bigger context window costs more memory.
     expect(estimateMemoryBytes(m, 32768)).toBeGreaterThan(need);
+  });
+
+  it("honours per-entry KV and overhead overrides", () => {
+    // The 27B's KV cache (from its GGUF headers) is double the fitted default;
+    // the MoE's is well under it. The estimate must use each model's own number.
+    const dense = getModel("qwen3.5-27b");
+    const moe = getModel("qwen3.5-35b-a3b");
+    expect(estimateMemoryBytes(dense, 8192) - estimateMemoryBytes(dense, 0))
+      .toBe(8192 * 96_000);
+    expect(estimateMemoryBytes(moe, 8192) - estimateMemoryBytes(moe, 0))
+      .toBe(8192 * 30_000);
+    // And a synthetic overheadFactor changes the weights term.
+    const fake = { bytes: 1e9, overheadFactor: 0.5 };
+    expect(estimateMemoryBytes(fake, 0)).toBe(1.5e9);
   });
 
   it("grades fit against memory actually usable, not installed RAM", () => {

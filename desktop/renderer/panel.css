@@ -165,6 +165,55 @@ body { background: var(--paper); overflow-y: auto; }
 .ready__sub { font-size: 12.5px; color: var(--ink-soft); margin: 2px 0 0; }
 .ready .btn { margin-left: auto; flex: 0 0 auto; }
 
+/* ---------------------------------------------------------- recommended picks */
+
+.picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 9px;
+}
+
+.pick {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 13px 14px;
+  transition: border-color 160ms var(--ease);
+}
+.pick[data-active="true"] { border-color: var(--iris-edge); background: var(--iris-wash); }
+
+.pick__head { display: flex; align-items: center; justify-content: space-between; }
+.pick__tier {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--iris);
+}
+.pick__name { font-size: 13px; font-weight: 570; margin: 7px 0 0; }
+.pick__gain { font-size: 11.5px; color: var(--ink-soft); margin: 4px 0 0; flex: 1 1 auto; }
+.pick__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 11px; }
+.pick__note {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  margin-left: auto;
+  text-align: right;
+  /* Wide buttons push the note to its own full-width row instead of squeezing it. */
+  flex: 1 0 max-content;
+}
+
+/* Five dots, lit from the left: the chart's shorthand for relative intelligence. */
+.dots { display: inline-flex; gap: 3px; align-items: center; }
+.dots i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--ink-faint); opacity: 0.35;
+}
+.dots i[data-on="true"] { background: var(--iris); opacity: 1; }
+
 /* --------------------------------------------------------------------- models */
 
 .models { display: flex; flex-direction: column; gap: 9px; }
@@ -216,6 +265,12 @@ body { background: var(--paper); overflow-y: auto; }
 .model__fit[data-level="great"] { color: var(--sage); }
 .model__fit[data-level="ok"] { color: var(--ink-faint); }
 .model__fit[data-level="tight"] { color: var(--amber); }
+.model__fit[data-level="too-big"] { color: var(--danger); }
+.model__fit[data-level="unknown"] { color: var(--ink-faint); }
+
+/* Models the Mac cannot hold stay on the chart, quietly. */
+.model[data-fit="too-big"] { opacity: 0.62; }
+.model__top .dots { margin-left: auto; }
 
 .progress {
   height: 4px; border-radius: 99px;

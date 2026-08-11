@@ -1,12 +1,21 @@
 /** Model listing, download control, and activation. */
-import { getModel } from "../../models/catalog.js";
+import { getModel, DEFAULT_MODEL_ID } from "../../models/catalog.js";
+import { recommendTiers } from "../../models/recommend.js";
+import { detectChip } from "../../models/machine.js";
 import { sseFrame } from "./chat.js";
 
-export function registerModelRoutes(routes, { engine, models, json, readJsonBody }) {
+export function registerModelRoutes(routes, { engine, models, json, readJsonBody, settings }) {
+  // The chip never changes while the server runs; detect once per process.
+  let chipPromise = null;
+  const chip = () => (chipPromise ??= detectChip());
+
   routes.set("GET /api/models", async (_req, res) => {
     const memory = await engine.memoryInfo();
+    const list = await models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens });
     json(res, 200, {
-      models: await models.list({ availableBytes: memory.total, contextTokens: engine.status().contextTokens }),
+      models: list,
+      tiers: recommendTiers(list),
+      machine: { chip: (await chip()).chip, availableBytes: memory.total },
       activeId: engine.modelId,
       downloadingId: models.activeDownloadId,
       memory,
@@ -69,6 +78,8 @@ export function registerModelRoutes(routes, { engine, models, json, readJsonBody
       await engine.unload();
     }
     await models.remove(id);
+    // A config pointing at a deleted model would silently boot with nothing.
+    if (settings && settings.get().modelId === id) await settings.set({ modelId: DEFAULT_MODEL_ID });
     json(res, 200, { ok: true });
   });
 
@@ -80,6 +91,9 @@ export function registerModelRoutes(routes, { engine, models, json, readJsonBody
     if (engine.isBusy) return json(res, 409, { error: "Finish the current message before switching models." });
 
     await engine.load(id, models.pathFor(id));
+    // Persist the choice, exactly as the desktop panel's path does — a switch made
+    // from the task pane used to silently revert on the next launch.
+    if (settings) await settings.set({ modelId: id });
     json(res, 200, { ok: true, activeId: engine.modelId });
   });
 }

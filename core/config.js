@@ -8,6 +8,7 @@ import { readFile, writeFile, mkdir, rename, rm, readdir, stat } from "node:fs/p
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_MODEL_ID } from "./models/catalog.js";
 
 export const APP_NAME = "Exovelletron";
 export const ADDIN_ID = "b6f4a2c1-9d3e-4a7b-8c15-2e6f0a9d4b73";
@@ -21,7 +22,7 @@ export const DEFAULT_PORT = 39217;
 
 export const DEFAULTS = Object.freeze({
   port: DEFAULT_PORT,
-  modelId: "qwen3.5-4b",
+  modelId: DEFAULT_MODEL_ID,
   contextTokens: 8192,
   sheetContextTokens: 6000,
   temperature: 0.3,
