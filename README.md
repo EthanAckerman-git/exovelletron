@@ -19,6 +19,7 @@ Everything runs on your own Mac. No account, no API key, no internet after setup
 |---|---|
 | **Explain your data** | "What am I looking at?" — it reads your selection and tells you. |
 | **See the whole workbook** | It knows every sheet's shape and reads exactly the ranges it needs — any sheet, any rows — before answering. The transcript shows a receipt for every read. |
+| **Get the maths right at any size** | Totals, largest values, counts, lookups — it asks Excel to compute them over *every* row with one formula, so the answer on a 20,000-row sheet is exact, never extrapolated. |
 | **Write formulas** | Describe the calculation; it fills the column and adjusts references per row. |
 | **Split messy columns** | One cell holding `"NAME 123 MAIN ST","CITY","ST","12345"`? It breaks that into proper named columns. |
 | **Rebuild truly messy data** | Records with fields stacked down separate rows, or a dozen records crammed into one cell? It reads the whole range in context and rebuilds it as a clean table — one row per record. |
@@ -136,8 +137,10 @@ match. Switching the active model is one click in the app.
 └─────────────────────────────────────┘
 
 The AI works the way a person would: it starts from a summary of your workbook, then
-asks the pane for the exact cells a question needs — another sheet, rows further down —
-and the pane reads them and hands them back. Every read appears in the transcript.
+asks the pane for exactly what a question needs — the cells on another sheet, rows
+further down, or a formula for Excel to evaluate over every row. The pane does it and
+hands the answer back. Every read and calculation appears in the transcript, and all
+the changes in one reply share a single Apply and a single Undo.
 ```
 
 **Private by construction, not by promise:**

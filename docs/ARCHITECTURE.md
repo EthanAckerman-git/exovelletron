@@ -45,7 +45,13 @@ the stream out, and the pane reads the cells (intersected with the used range, c
 2,000 cells) and POSTs them back to `/api/chat/read` to resolve it. Budgets bound the
 failure modes — eight reads a turn, a 20-second answer timeout, and a grid clamp at a
 quarter of the context window — so a small model that loops on the tool degrades into
-"answer with what you have", never into a hung turn.
+"answer with what you have", never into a hung turn. Aggregates take the same bridge
+through a `calculate` tool: one formula evaluated in a scratch cell just past the used
+range and cleared before anyone sees it, because "the largest of twenty thousand rows"
+must be Excel's exact answer, never the model's extrapolation — live testing caught the
+model reading the last two rows of a 20,000-row sheet and declaring the bottom one the
+maximum. Excel errors ("#NAME?") flow back as the value so the model can correct its
+own formula, which it does.
 
 **Three paths for sheet work.** Chat sees a sample plus whatever it reads. Anything that needs
 every row (splitting a column, standardising 500 addresses) goes down a separate batched
