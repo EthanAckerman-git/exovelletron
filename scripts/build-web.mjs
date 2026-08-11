@@ -32,7 +32,12 @@ async function main() {
     });
     await cp(path.join(ROOT, "taskpane", "preview.html"), path.join(DIST, "app", "preview.html"));
     await cp(path.join(ROOT, "taskpane", "debug.html"), path.join(DIST, "app", "debug.html"));
-    await cp(path.join(ROOT, "taskpane", "debug-pane.html"), path.join(DIST, "app", "debug-pane.html"));
+    // The harness pane markup is generated from the real index.html rather than kept
+    // as a copy — a hand-maintained snapshot drifted the moment a button was added,
+    // and the harness crashed on a getElementById(null).
+    const index = await readFile(path.join(ROOT, "taskpane", "index.html"), "utf8");
+    const body = index.match(/<body>([\s\S]*)<\/body>/)[1].replace(/<script[\s\S]*?<\/script>/g, "");
+    await writeFile(path.join(DIST, "app", "debug-pane.html"), body.trim(), "utf8");
   }
 
   await build({

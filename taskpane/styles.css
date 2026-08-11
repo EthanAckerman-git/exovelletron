@@ -18,15 +18,23 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ------------------------------------------------------------------ status strip */
 
+/* Excel draws its own sideloaded-add-in "i" badge over the pane's top-right corner.
+   It cannot be removed from in here, so every header that reaches the top-right —
+   the status strip, the history panel's head, any future overlay — stops well short
+   of it. Otherwise the badge lands exactly on the last button and swallows its clicks. */
+:root { --badge-clearance: 44px; }
+.status,
+.history__head {
+  padding-right: var(--badge-clearance);
+}
+
 .status {
   display: flex;
   align-items: center;
   gap: calc(var(--step) * 2);
-  padding: calc(var(--step) * 2.5) calc(var(--step) * 3);
-  /* Excel draws its own sideloaded-add-in "i" badge over the pane's top-right corner.
-     It cannot be removed from in here, so the header stops well short of it — otherwise
-     the badge lands exactly on the last button and swallows its clicks. */
-  padding-right: 44px;
+  padding-top: calc(var(--step) * 2.5);
+  padding-bottom: calc(var(--step) * 2.5);
+  padding-left: calc(var(--step) * 3);
   border-bottom: 1px solid var(--rule);
   background: var(--surface);
   flex: 0 0 auto;
@@ -638,7 +646,10 @@ html, body { height: 100%; overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: calc(var(--step) * 2.5) calc(var(--step) * 3);
+  /* Right padding comes from the shared badge-clearance rule up top. */
+  padding-top: calc(var(--step) * 2.5);
+  padding-bottom: calc(var(--step) * 2.5);
+  padding-left: calc(var(--step) * 3);
   border-bottom: 1px solid var(--rule);
   background: var(--surface);
 }

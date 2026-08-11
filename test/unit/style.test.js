@@ -40,3 +40,26 @@ describe("headerStyleFrom", () => {
     expect(DEFAULT_HEADER_STYLE.fontColor).toBe("#FFFFFF");
   });
 });
+
+describe("Excel's ⓘ badge clearance", () => {
+  // Excel draws an un-removable sideloaded-add-in badge over the pane's top-right.
+  // Regression: the status strip reserved space for it but the history panel's head
+  // did not, so the badge sat exactly on the panel's close button.
+  it("reserves the badge corner on every top-of-pane header", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const css = await readFile(new URL("../../taskpane/styles.css", import.meta.url), "utf8");
+
+    const shared = /\.status,\s*\.history__head\s*\{\s*padding-right:\s*var\(--badge-clearance\)/.exec(css);
+    expect(shared, "shared badge-clearance rule").toBeTruthy();
+    expect(css).toContain("--badge-clearance: 44px");
+
+    // Neither header may re-set padding with the shorthand, which would silently
+    // override the shared right-padding reservation.
+    for (const header of ["status", "history__head"]) {
+      const block = new RegExp(`\\.${header}\\s*\\{[^}]*\\}`, "g");
+      for (const m of css.match(block) ?? []) {
+        expect(m, `.${header} must not use the padding shorthand`).not.toMatch(/[{;]\s*padding:/);
+      }
+    }
+  });
+});

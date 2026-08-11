@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseRange, columnToIndex, indexToColumn, validateAction, stripBlankParams,
-  MAX_CELLS_PER_ACTION, ACTION_SPECS, ACTION_NAMES, lastRowOf,
+  MAX_CELLS_PER_ACTION, ACTION_SPECS, ACTION_NAMES, lastRowOf, sanitizeFormula,
 } from "../../core/llm/actions.js";
 
 describe("column letter conversion", () => {
@@ -70,6 +70,20 @@ describe("validateAction: write_formula", () => {
   it("requires a leading =", () => {
     expect(validateAction("write_formula", { address: "A1", formula: "C2*D2" }))
       .toMatchObject({ ok: false, error: expect.stringMatching(/must start with/) });
+  });
+
+  // Regression: the model wrote =[B2]*[C2]; to Excel a bracket opens an external-workbook
+  // reference, and applying the proposal failed with "the argument is invalid".
+  it("unwraps bracket-wrapped cell references but leaves structured references alone", () => {
+    const r = validateAction("write_formula", { address: "D2:D7", formula: "=[B2]*[C2]" });
+    expect(r.ok).toBe(true);
+    expect(r.action.formula).toBe("=B2*C2");
+    expect(r.action.summary).toContain("=B2*C2");
+
+    expect(sanitizeFormula("=SUM([$B$2]:[B7])")).toBe("=SUM($B$2:B7)");
+    expect(sanitizeFormula("=SUM(Table1[@Units])")).toBe("=SUM(Table1[@Units])");
+    expect(sanitizeFormula("=Table1[[#This Row],[Price]]")).toBe("=Table1[[#This Row],[Price]]");
+    expect(sanitizeFormula("='[Book1.xlsx]Sheet1'!A1")).toBe("='[Book1.xlsx]Sheet1'!A1");
   });
 
   it("refuses to fill more than the cell budget", () => {

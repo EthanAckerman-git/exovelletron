@@ -56,6 +56,10 @@ range as one document and writes one row per record it finds (see below).
 | `llm/extract.js` | Whole-range record extraction, blank-line chunking |
 | `llm/prompt.js` | System prompt, worksheet rendering, token budget |
 | `models/` | Catalog, resumable verified downloads, on-disk state |
+| `models/machine.js` | Chip detection (`sysctl` marketing name), pure parser |
+| `models/recommend.js` | Fast / Balanced / Max tier ladder from fit + intelligence |
+| `search.js` | Opt-in DuckDuckGo search, pure parser over the HTML endpoint |
+| `fetchpage.js` | Opt-in page reading: URL allow-list, HTML→text, honest truncation |
 | `history/` | Conversation persistence |
 | `server/` | HTTPS server, static serving, auth, routes |
 | `setup/` | Certificates, manifest, preflight checks |
@@ -125,6 +129,19 @@ mid-stream and used to render with a clickable Apply, but the engine does one th
 time — an early click always failed with "the model is busy". Cards now appear disarmed
 and are enabled when the turn ends, with a click-time guard for cards from earlier turns.
 
+**Two model-switch entry points drifted apart.** The panel's IPC path persisted the
+choice but did not check whether the engine was mid-reply; the pane's HTTP path checked
+busyness but never persisted, so a switch made from Excel silently reverted on the next
+launch. Both now guard and both now persist, with identical wording, and integration
+tests pin each behaviour so the next drift fails CI.
+
+**Memory estimates cannot be one-size-fits-all.** The fitted per-token KV constant that
+works for the small dense models undershoots the 27B (double the KV heads × layers) and
+wildly overshoots the MoE. Each large entry carries its own `kvBytesPerToken`, derived
+from its GGUF header read remotely over Range requests, scaled by the measured-to-
+theoretical ratio of the models that have actually run here. The fit badge is the whole
+credibility of the picker; it must not guess.
+
 ## The add-in installation constraint
 
 Excel reads sideloaded manifests from
@@ -150,16 +167,24 @@ already pointing at `wef`. A Finder drag also works and is kept as a fallback.
   something tried.
 - Office.js is vendored and served locally; its telemetry sink is replaced with a no-op,
   making telemetry structurally impossible rather than merely disabled.
-- Web search is **opt-in and off by default**. When the user enables it (the globe in the
-  pane), the model gains one data tool that sends the search query — nothing else — to
-  DuckDuckGo's HTML endpoint (chosen because it needs no API key or account) and gets
-  back result titles, URLs, and snippets. No pages are fetched, and turning it off
-  removes the tool entirely. The default configuration transmits nothing, ever.
+- Web access is **opt-in and off by default**. When the user enables it (the globe in
+  the pane), the model gains exactly two data tools: `search_web` sends the search
+  query — nothing else — to DuckDuckGo's HTML endpoint (chosen because it needs no API
+  key or account), and `fetch_page` opens one page and reads its text. What leaves the
+  Mac is therefore the query and the URLs of opened pages; spreadsheet data never rides
+  along. `fetch_page` refuses loopback, RFC-1918, link-local, and mDNS addresses, and
+  follows redirects manually so every hop faces the same allow-list — the model must
+  not become a bridge to the user's own network. Page text is clamped to a fraction of
+  the context window with the truncation stated, and the transcript shows a receipt
+  chip for every search and every page opened. Turning the globe off removes both
+  tools entirely. The default configuration transmits nothing, ever.
 
 ## Testing
 
-242 tests. Alongside the ordinary coverage, there is a regression test for every finding
-above — including one that reads the task pane's routing table and asserts that every
-action the model can propose has an apply path, after `split_column` shipped without one.
+`npm test` runs the whole unit + integration suite (the count only ever goes up; the
+suite is the source of truth, not this file). Alongside the ordinary coverage, there is
+a regression test for every finding above — including one that reads the task pane's
+routing table and asserts that every action the model can propose has an apply path,
+after `split_column` shipped without one.
 
 `scripts/smoke-engine.mjs` exercises the real model end to end.

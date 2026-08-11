@@ -91,6 +91,17 @@ function assertGridFits(values, rows, cols) {
 const scalar = (v) => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : v);
 
 /**
+ * Undo one formula habit the model has that Excel's API hard-rejects: wrapping plain
+ * cell references in square brackets, `=[B2]*[C2]`. To Excel a leading bracket means
+ * an external-workbook reference, so applying such a formula fails with "the argument
+ * is invalid". Only a bracket holding nothing but one A1-style reference is unwrapped —
+ * structured table references like `Table1[@Units]` or `[[#This Row],[Price]]` carry
+ * no bare row number and pass through untouched.
+ */
+export const sanitizeFormula = (formula) =>
+  String(formula).replace(/\[(\$?[A-Za-z]{1,3}\$?\d{1,7})\]/g, "$1");
+
+/**
  * Tool definitions handed to the model, plus a validator that turns raw arguments into
  * a normalized action. Keeping the schema and the validator adjacent means they cannot
  * drift apart.
@@ -144,7 +155,7 @@ export const ACTION_SPECS = {
     },
     validate(args, context) {
       const range = parseRange(args.sheet ? `${args.sheet}!${args.address}` : args.address);
-      const formula = String(args.formula ?? "").trim();
+      const formula = sanitizeFormula(String(args.formula ?? "").trim());
       if (!formula.startsWith("=")) throw new Error('formula must start with "="');
       if (formula.length > 8192) throw new Error("formula is too long");
 
