@@ -361,6 +361,16 @@ html, body { height: 100%; overflow: hidden; }
   border-bottom: 1px solid var(--rule);
 }
 
+/* Grouped changes: one card, one Apply, a hairline between the parts. Each part
+   carries its own address line, shown only once the card holds more than one. */
+.proposal__section + .proposal__section { border-top: 2px solid var(--rule); }
+.proposal__sectionaddr {
+  padding: calc(var(--step) * 1.5) calc(var(--step) * 2) 0;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+.proposal[data-multi="false"] .proposal__sectionaddr { display: none; }
+
 /* The mini-grid: a literal slice of spreadsheet so approving means seeing. */
 .grid { overflow-x: auto; background: var(--surface); }
 

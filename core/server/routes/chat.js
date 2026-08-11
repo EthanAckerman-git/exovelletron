@@ -91,7 +91,9 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
           READ_TIMEOUT_MS,
         );
         pendingReads.set(id, { resolve, timer });
-        res.write(sseFrame("read_request", { id, sheet: request.sheet, address: request.address }));
+        // The whole request rides along: reads carry an address, calculations a
+        // formula, and the pane branches on `kind`.
+        res.write(sseFrame("read_request", { id, ...request }));
       });
 
     try {
@@ -132,6 +134,8 @@ export function registerChatRoutes(routes, { engine, json, readJsonBody }) {
           startRow: Number.isInteger(body.startRow) ? body.startRow : 1,
           columnLetters: Array.isArray(body.columnLetters) ? body.columnLetters : [],
           rows: Array.isArray(body.rows) ? body.rows : [],
+          // A calculation's answer: one scalar (or an error string like "#NAME?").
+          value: ["string", "number", "boolean"].includes(typeof body.value) ? body.value : null,
         }
       : { ok: false, error: typeof body.error === "string" ? body.error : "the read failed" };
 

@@ -238,7 +238,7 @@ describe("local server", () => {
   });
 
   it("carries a workbook read out over the stream and back through /api/chat/read", async () => {
-    serverEngine.readRequest = { sheet: "Sales", address: "A2:B3" };
+    serverEngine.readRequest = { kind: "read", sheet: "Sales", address: "A2:B3" };
     serverEngine.lastReadResult = null;
     const events = await callSse(port, "/api/chat", {
       headers: auth(),
@@ -258,9 +258,32 @@ describe("local server", () => {
     serverEngine.readRequest = null;
 
     const readReq = events.find((e) => e.event === "read_request");
-    expect(readReq.payload).toMatchObject({ sheet: "Sales", address: "A2:B3" });
+    expect(readReq.payload).toMatchObject({ kind: "read", sheet: "Sales", address: "A2:B3" });
     expect(readReq.payload.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(serverEngine.lastReadResult).toMatchObject({ ok: true, sheet: "Sales", startRow: 2, rows: [["x", 1], ["y", 2]] });
+    expect(events.at(-1).event).toBe("done");
+  });
+
+  it("carries a calculation out and its value back", async () => {
+    serverEngine.readRequest = { kind: "calc", sheet: null, formula: "=MAX(Big!B2:B20001)" };
+    serverEngine.lastReadResult = null;
+    const events = await callSse(port, "/api/chat", {
+      headers: auth(),
+      body: JSON.stringify({ message: "largest amount?" }),
+      onEvent: (event, payload) => {
+        if (event !== "read_request") return;
+        call(port, "/api/chat/read", {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({ id: payload.id, ok: true, sheet: "Big", value: 1173.53 }),
+        });
+      },
+    });
+    serverEngine.readRequest = null;
+
+    const readReq = events.find((e) => e.event === "read_request");
+    expect(readReq.payload).toMatchObject({ kind: "calc", formula: "=MAX(Big!B2:B20001)" });
+    expect(serverEngine.lastReadResult).toMatchObject({ ok: true, sheet: "Big", value: 1173.53 });
     expect(events.at(-1).event).toBe("done");
   });
 

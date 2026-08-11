@@ -1,5 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { splitReadAddress, MAX_READ_CELLS } from "../../taskpane/sheet/reader.js";
+import { splitReadAddress, calculateForModel, MAX_READ_CELLS } from "../../taskpane/sheet/reader.js";
+
+describe("calculateForModel guards", () => {
+  it("refuses a non-formula before touching Excel", async () => {
+    // No Excel global exists in this test — reaching Excel.run would throw
+    // ReferenceError, so a clean {ok:false} proves the guard runs first.
+    expect(await calculateForModel({ sheet: null, formula: "MAX(A:A)" })).toEqual({
+      ok: false, error: 'the formula must start with "="',
+    });
+    expect(await calculateForModel({ sheet: null, formula: "" })).toEqual({
+      ok: false, error: 'the formula must start with "="',
+    });
+  });
+});
 
 describe("splitReadAddress", () => {
   it("passes a plain address through with the given sheet", () => {

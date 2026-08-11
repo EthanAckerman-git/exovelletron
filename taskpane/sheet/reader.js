@@ -102,3 +102,53 @@ export async function readRangeForModel(request) {
     return { ok: false, error };
   }
 }
+
+/**
+ * Evaluate one formula in a scratch cell just past the sheet's data, read the result,
+ * and clear the cell — Excel does the arithmetic over any number of rows, and the
+ * sheet the user sees never changes. An Excel error ("#NAME?") comes back as the
+ * value, so the model can see exactly what Excel objected to and correct itself.
+ *
+ * @param {{sheet:string|null, formula:string}} request
+ * @returns {Promise<{ok:true, sheet:string, value:any} | {ok:false, error:string}>}
+ */
+export async function calculateForModel({ sheet, formula }) {
+  const f = String(formula ?? "").trim();
+  if (!f.startsWith("=")) return { ok: false, error: 'the formula must start with "="' };
+
+  try {
+    return await Excel.run(async (ctx) => {
+      const ws = sheet
+        ? ctx.workbook.worksheets.getItemOrNullObject(sheet)
+        : ctx.workbook.worksheets.getActiveWorksheet();
+      ws.load("name");
+      const used = ws.getUsedRangeOrNullObject(true);
+      used.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+      await ctx.sync();
+
+      if (ws.isNullObject) {
+        return { ok: false, error: `there is no sheet named "${sheet}" — the sheet list in your context has the real names` };
+      }
+
+      // One row and one column beyond the data (or A1 on an empty sheet), clamped to
+      // the grid — nothing the user has touched.
+      const row = used.isNullObject ? 0 : Math.min(used.rowIndex + used.rowCount + 1, 1_048_575);
+      const col = used.isNullObject ? 0 : Math.min(used.columnIndex + used.columnCount + 1, 16_383);
+      const cell = ws.getRangeByIndexes(row, col, 1, 1);
+      cell.formulas = [[f]];
+      cell.load("values");
+      await ctx.sync();
+
+      const value = cell.values[0][0];
+      cell.clear(Excel.ClearApplyTo.all);
+      await ctx.sync();
+
+      return { ok: true, sheet: ws.name, value };
+    });
+  } catch (err) {
+    const error = err?.code === "InvalidArgument"
+      ? `Excel rejected that formula — check the syntax and the sheet names it references`
+      : err?.message || "the calculation failed";
+    return { ok: false, error };
+  }
+}

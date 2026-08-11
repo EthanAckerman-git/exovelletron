@@ -61,7 +61,7 @@ describe("the read_range tool", () => {
       return "ok";
     };
     await engine.chat({ message: "hi", readSheet });
-    expect(requests).toEqual([{ sheet: "Sales", address: "A2:B3" }]);
+    expect(requests).toEqual([{ kind: "read", sheet: "Sales", address: "A2:B3" }]);
     expect(reply).toContain("Contents of Sales!A2:B3");
     expect(reply).toContain("row | A | B");
     expect(reply).toContain("2 | x | 1");
@@ -111,6 +111,57 @@ describe("the read_range tool", () => {
     });
     expect(replies).toHaveLength(MAX_READS_PER_TURN + 1);
     expect(replies.at(-2)).toContain("Contents of");
+    expect(replies.at(-1)).toMatch(/Read budget exhausted/);
+  });
+
+  it("evaluates aggregates through the calculate tool instead of guessing", async () => {
+    const driver = {};
+    const engine = await readyEngine(driver);
+    const requests = [];
+    const readSheet = async (req) => {
+      requests.push(req);
+      return { ok: true, sheet: "Big", value: 1173.53 };
+    };
+    let reply;
+    let rejected;
+    driver.run = async (_text, opts) => {
+      rejected = await opts.functions.calculate.handler({ formula: "MAX(B:B)" });
+      reply = await opts.functions.calculate.handler({ formula: "=MAX(Big!B2:B20001)" });
+      return "ok";
+    };
+    await engine.chat({ message: "hi", readSheet });
+    expect(rejected).toMatch(/must start with "="/);
+    expect(requests).toEqual([{ kind: "calc", formula: "=MAX(Big!B2:B20001)", sheet: null }]);
+    expect(reply).toBe("=MAX(Big!B2:B20001) evaluates to: 1173.53");
+  });
+
+  it("relays a calculation failure in words the model can act on", async () => {
+    const driver = {};
+    const engine = await readyEngine(driver);
+    let reply;
+    driver.run = async (_text, opts) => {
+      reply = await opts.functions.calculate.handler({ formula: "=MAXX(B:B)" });
+      return "ok";
+    };
+    await engine.chat({ message: "hi", readSheet: async () => ({ ok: false, error: "Excel rejected that formula" }) });
+    expect(reply).toMatch(/could not be calculated: Excel rejected that formula/);
+  });
+
+  it("counts calculations against the same per-turn budget as reads", async () => {
+    const driver = {};
+    const engine = await readyEngine(driver);
+    const replies = [];
+    driver.run = async (_text, opts) => {
+      for (let i = 0; i < MAX_READS_PER_TURN; i++) {
+        replies.push(await opts.functions.read_range.handler({ address: "A1:A2" }));
+      }
+      replies.push(await opts.functions.calculate.handler({ formula: "=SUM(A:A)" }));
+      return "ok";
+    };
+    await engine.chat({
+      message: "hi",
+      readSheet: async () => ({ ok: true, sheet: "S", address: "A1:A2", startRow: 1, columnLetters: ["A"], rows: [[1], [2]] }),
+    });
     expect(replies.at(-1)).toMatch(/Read budget exhausted/);
   });
 

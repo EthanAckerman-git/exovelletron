@@ -474,6 +474,7 @@ export class Engine extends EventEmitter {
             return "Read budget exhausted for this turn — stop reading and answer from what you have already seen.";
           }
           const req = {
+            kind: "read",
             address: String(address ?? "").trim(),
             sheet: typeof sheet === "string" && sheet.trim() ? sheet.trim() : null,
           };
@@ -508,6 +509,47 @@ export class Engine extends EventEmitter {
             `Contents of ${where} (showing the first ${shown} of ${result.rows.length} rows — ` +
             `read a narrower range for the rest):\n\n${kept.join("\n")}`
           );
+        },
+      });
+
+      // Aggregates are Excel's job. A model cannot scan twenty thousand rows, and a
+      // model that reads three of them and extrapolates gives a confident wrong
+      // answer — so totals, extremes, and lookups go through one formula that Excel
+      // evaluates in a scratch cell the user never sees.
+      fns.calculate = defineChatSessionFunction({
+        description:
+          "Calculate one Excel formula and return its result WITHOUT changing the sheet. The only " +
+          "reliable way to answer totals, averages, maximums, counts, or lookups across many rows — " +
+          "Excel computes over every row so you never have to see them. Examples: =MAX(Big!B2:B20001), " +
+          '=SUMIF(C:C,"West",B:B), =INDEX(Big!A:A,MATCH(MAX(Big!B:B),Big!B:B,0)).',
+        params: {
+          type: "object",
+          properties: {
+            formula: { type: "string", description: 'The formula, starting with "=". Qualify ranges with the sheet name.' },
+            sheet: { type: "string", description: "Worksheet unqualified references resolve against. Omit for the active sheet." },
+          },
+          required: ["formula"],
+        },
+        handler: async ({ formula, sheet }) => {
+          reads.count += 1;
+          if (reads.count > MAX_READS_PER_TURN) {
+            return "Read budget exhausted for this turn — stop and answer from what you have already seen.";
+          }
+          const req = {
+            kind: "calc",
+            formula: String(formula ?? "").trim(),
+            sheet: typeof sheet === "string" && sheet.trim() ? sheet.trim() : null,
+          };
+          if (!req.formula.startsWith("=")) return 'Rejected: the formula must start with "=".';
+
+          const result = await readSheet(req);
+          if (!result?.ok) {
+            return (
+              `That could not be calculated: ${result?.error || "the workbook did not answer"}. ` +
+              "Fix the formula and try once more, or answer from what you can see."
+            );
+          }
+          return `${req.formula} evaluates to: ${JSON.stringify(result.value)}`;
         },
       });
     }

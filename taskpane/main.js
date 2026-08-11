@@ -3,10 +3,10 @@
  */
 import * as api from "./api.js";
 import { readSheetContext, describeSelection } from "./sheet/context.js";
-import { readRangeForModel } from "./sheet/reader.js";
+import { readRangeForModel, calculateForModel } from "./sheet/reader.js";
 import { applyAction, revealRange } from "./sheet/apply.js";
 import { runTransform, runExtract } from "./sheet/transform.js";
-import { el, buildTurn, buildProposal, armProposals, renderProse } from "./ui/render.js";
+import { el, buildTurn, buildProposal, buildProposalGroup, armProposals, renderProse } from "./ui/render.js";
 import { createHistoryPanel } from "./ui/history.js";
 
 const dom = {};
@@ -465,6 +465,7 @@ async function submit() {
 
   let text = "";
   let firstToken = true;
+  let proposalGroup = null;
   const caret = el("span", "caret");
 
   const setVerb = (verb) => { pendingVerb.textContent = verb; };
@@ -509,9 +510,18 @@ async function submit() {
         setVerb(`Opening ${where}`);
         appendChip("⧉", `Opened ${where}`);
       },
-      // The model asked to see part of the workbook. Read it, hand the cells back
-      // through the side channel, and leave an honest receipt either way.
-      onReadRequest: async ({ id, sheet, address }) => {
+      // The model asked the workbook for something — cells to see, or a formula to
+      // evaluate. Do it, hand the answer back through the side channel, and leave an
+      // honest receipt either way.
+      onReadRequest: async ({ id, kind, sheet, address, formula }) => {
+        if (kind === "calc") {
+          const shown = formula.length > 42 ? `${formula.slice(0, 42)}…` : formula;
+          setVerb(`Calculating ${shown}`);
+          const result = await calculateForModel({ sheet, formula });
+          api.postReadResult({ id, ...result }).catch(() => {});
+          appendChip("∑", result.ok ? `Calculated ${shown}` : `Couldn't calculate ${shown}`);
+          return;
+        }
         const asked = [sheet, address].filter(Boolean).join("!");
         setVerb(`Reading ${asked}`);
         const result = await readRangeForModel({ sheet, address });
@@ -522,14 +532,29 @@ async function submit() {
       onAction: (action) => {
         caret.remove();
         setVerb("Proposing a change");
-        // The card appears while the reply is still streaming, but its buttons stay
+        // Cards appear while the reply is still streaming, but their buttons stay
         // disabled until the turn ends — the engine can only do one thing at a time,
         // so an early click would just be refused as busy.
-        answer.turn.appendChild(buildProposal(
-          action,
-          { onApply: applyProposal, canApply: whyApplyIsBlocked },
-          { deferActions: true },
-        ));
+        //
+        // Instant changes from one reply share ONE card and ONE Apply — a header plus
+        // the column under it is a single idea, not two questions. Long-running work
+        // keeps its own card for its progress-and-stop lifecycle.
+        if (BATCHED_ACTIONS.has(action.type) || action.type === EXTRACT_ACTION) {
+          answer.turn.appendChild(buildProposal(
+            action,
+            { onApply: applyProposal, canApply: whyApplyIsBlocked },
+            { deferActions: true },
+          ));
+        } else {
+          if (!proposalGroup) {
+            proposalGroup = buildProposalGroup(
+              { onApply: applyProposal, canApply: whyApplyIsBlocked },
+              { deferActions: true },
+            );
+            answer.turn.appendChild(proposalGroup.card);
+          }
+          proposalGroup.add(action);
+        }
         scrollToEnd();
       },
       onDone: ({ text: finalText, stats, actions }) => {

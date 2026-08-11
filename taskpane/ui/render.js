@@ -153,6 +153,150 @@ export function armProposals(root) {
   }
 }
 
+/** The body of one instant change, shared by the single card and the grouped card. */
+function buildActionSection(action) {
+  const section = el("div", "proposal__section");
+  section.appendChild(el("div", "proposal__sectionaddr mono",
+    action.sheet ? `${action.sheet}!${action.address ?? ""}` : (action.address ?? "")));
+  const showsGrid = action.type === "write_formula" || action.type === "write_values";
+  section.appendChild(showsGrid ? el("div", "proposal__summary", action.summary) : buildDetails(action));
+  if (showsGrid) section.appendChild(buildGrid(action));
+  return section;
+}
+
+/**
+ * One card that gathers every instant change from a single reply behind ONE Apply.
+ *
+ * A reply that writes a header and then fills the column under it is one idea; asking
+ * the user to approve it twice is noise. Changes apply in order and roll back
+ * together — a failure part-way undoes whatever already landed, so the sheet never
+ * holds half a proposal. Long-running work (column rewrites, extraction) keeps its
+ * own card, because it has a progress-and-stop lifecycle this card does not.
+ *
+ * Returns { card, add }; `add` absorbs each action as it streams in.
+ */
+export function buildProposalGroup(handlers, { deferActions = false } = {}) {
+  const card = el("div", "proposal");
+  card.dataset.status = "pending";
+  card.dataset.multi = "false";
+
+  const head = el("div", "proposal__head");
+  const label = el("span", "eyebrow proposal__label", "Proposed change");
+  const addr = el("span", "proposal__addr", "");
+  head.append(label, addr);
+  card.appendChild(head);
+
+  const sections = el("div", "proposal__sections");
+  card.appendChild(sections);
+
+  const actionsRow = el("div", "proposal__actions");
+  const apply = el("button", "btn btn--primary", "Apply");
+  const dismiss = el("button", "btn btn--quiet", "Dismiss");
+  actionsRow.append(apply, dismiss);
+  if (deferActions) {
+    apply.disabled = true;
+    dismiss.disabled = true;
+    card.dataset.waiting = "true";
+    actionsRow.appendChild(el("span", "proposal__wait", "Available when the reply finishes…"));
+  }
+  card.appendChild(actionsRow);
+
+  const queue = [];
+
+  const add = (action) => {
+    queue.push(action);
+    sections.appendChild(buildActionSection(action));
+    if (queue.length === 1) {
+      addr.textContent = action.sheet ? `${action.sheet}!${action.address ?? ""}` : (action.address ?? "");
+    } else {
+      card.dataset.multi = "true";
+      label.textContent = `Proposed changes (${queue.length})`;
+      apply.textContent = `Apply all ${queue.length}`;
+      addr.textContent = "";
+    }
+  };
+
+  const finish = (undos) => {
+    card.dataset.status = "applied";
+    label.textContent = "Applied";
+    actionsRow.remove();
+    const receipt = el("div", "proposal__receipt");
+    receipt.appendChild(el("span", null,
+      queue.length === 1 ? "Change written to the sheet" : `${queue.length} changes written to the sheet`));
+    if (undos.length) {
+      const undoBtn = el("button", "link", "Undo");
+      undoBtn.addEventListener("click", async () => {
+        undoBtn.disabled = true;
+        undoBtn.textContent = "Undoing…";
+        try {
+          for (const undo of [...undos].reverse()) await undo();
+          receipt.textContent = "";
+          receipt.appendChild(el("span", null, queue.length === 1 ? "Change undone" : "All changes undone"));
+          card.dataset.status = "pending";
+          label.textContent = "Undone";
+        } catch (err) {
+          undoBtn.disabled = false;
+          undoBtn.textContent = "Undo";
+          receipt.querySelector("span").textContent = `Could not undo: ${err.message}`;
+        }
+      });
+      receipt.appendChild(undoBtn);
+    }
+    card.appendChild(receipt);
+  };
+
+  apply.addEventListener("click", async () => {
+    card.querySelector(".proposal__error")?.remove();
+
+    const blocked = handlers.canApply?.();
+    if (typeof blocked === "string") {
+      const notice = el("div", "proposal__summary proposal__error", blocked);
+      notice.style.color = "var(--amber)";
+      card.insertBefore(notice, actionsRow);
+      return;
+    }
+
+    const applyLabel = apply.textContent;
+    apply.disabled = true;
+    dismiss.disabled = true;
+    apply.textContent = "Applying…";
+
+    const undos = [];
+    try {
+      for (const action of queue) {
+        const { undo } = await handlers.onApply(action, {});
+        if (undo) undos.push(undo);
+      }
+      finish(undos);
+    } catch (err) {
+      // Roll back whatever landed, most recent first, so the sheet holds all of the
+      // proposal or none of it.
+      for (const undo of undos.reverse()) {
+        try { await undo(); } catch { /* keep unwinding */ }
+      }
+      apply.disabled = false;
+      dismiss.disabled = false;
+      apply.textContent = applyLabel;
+      const error = el("div", "proposal__summary proposal__error",
+        `Could not apply: ${err.message}. The sheet was left unchanged.`);
+      error.style.color = "var(--danger)";
+      card.insertBefore(error, actionsRow);
+    }
+  });
+
+  dismiss.addEventListener("click", () => {
+    for (const action of queue) handlers.onDismiss?.(action);
+    card.dataset.status = "applied";
+    label.textContent = "Dismissed";
+    actionsRow.remove();
+    const receipt = el("div", "proposal__receipt");
+    receipt.appendChild(el("span", null, queue.length === 1 ? "Change dismissed" : "Changes dismissed"));
+    card.appendChild(receipt);
+  });
+
+  return { card, add };
+}
+
 /**
  * Build the proposed-change card.
  * @param {object} action
