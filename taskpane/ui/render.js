@@ -153,25 +153,48 @@ export function armProposals(root) {
   }
 }
 
-/** The body of one instant change, shared by the single card and the grouped card. */
+const isBatchedType = (type) =>
+  type === "transform_column" || type === "split_column" || type === "extract_table";
+
+/** The button label a change deserves when it stands alone. */
+const applyLabelFor = (action) =>
+  action.type === "extract_table"
+    ? "Extract records"
+    : isBatchedType(action.type)
+      ? `${action.columns ? "Split" : "Rewrite"} ${action.rows} rows`
+      : "Apply";
+
+/**
+ * The body of one change inside the grouped card. Instant changes show their summary
+ * (and preview grid); long-running ones carry their instruction block plus a progress
+ * bar and sample area that come alive during the run.
+ */
 function buildActionSection(action) {
   const section = el("div", "proposal__section");
   section.appendChild(el("div", "proposal__sectionaddr mono",
     action.sheet ? `${action.sheet}!${action.address ?? ""}` : (action.address ?? "")));
+
+  if (isBatchedType(action.type)) {
+    const transform = buildTransformBody(action);
+    section.appendChild(transform.wrap);
+    return { section, transform };
+  }
+
   const showsGrid = action.type === "write_formula" || action.type === "write_values";
   section.appendChild(showsGrid ? el("div", "proposal__summary", action.summary) : buildDetails(action));
   if (showsGrid) section.appendChild(buildGrid(action));
-  return section;
+  return { section, transform: null };
 }
 
 /**
- * One card that gathers every instant change from a single reply behind ONE Apply.
+ * ONE card for everything a reply proposes — instant writes and long-running jobs
+ * alike — behind ONE Apply, with ONE Undo.
  *
- * A reply that writes a header and then fills the column under it is one idea; asking
- * the user to approve it twice is noise. Changes apply in order and roll back
- * together — a failure part-way undoes whatever already landed, so the sheet never
- * holds half a proposal. Long-running work (column rewrites, extraction) keeps its
- * own card, because it has a progress-and-stop lifecycle this card does not.
+ * A reply that splits a column and cleans two others is one plan; asking the user to
+ * approve it three times is noise. Changes apply in order (long jobs streaming their
+ * progress into their own section, stoppable mid-run), roll back together when one
+ * fails, and undo in reverse with one click. Every undo verifies the cells still hold
+ * exactly what was written and refuses rather than wiping newer work.
  *
  * Returns { card, add }; `add` absorbs each action as it streams in.
  */
@@ -201,18 +224,60 @@ export function buildProposalGroup(handlers, { deferActions = false } = {}) {
   }
   card.appendChild(actionsRow);
 
-  const queue = [];
+  /** [{action, transform}] in arrival order. */
+  const entries = [];
+  /** Set while a long job runs so Dismiss can act as Stop. */
+  let cancelRunningJob = null;
 
   const add = (action) => {
-    queue.push(action);
-    sections.appendChild(buildActionSection(action));
-    if (queue.length === 1) {
+    const built = buildActionSection(action);
+    entries.push({ action, transform: built.transform });
+    sections.appendChild(built.section);
+    if (entries.length === 1) {
       addr.textContent = action.sheet ? `${action.sheet}!${action.address ?? ""}` : (action.address ?? "");
+      apply.textContent = applyLabelFor(action);
     } else {
       card.dataset.multi = "true";
-      label.textContent = `Proposed changes (${queue.length})`;
-      apply.textContent = `Apply all ${queue.length}`;
+      label.textContent = `Proposed changes (${entries.length})`;
+      apply.textContent = `Apply all ${entries.length}`;
       addr.textContent = "";
+    }
+  };
+
+  const showError = (text) => {
+    const error = el("div", "proposal__summary proposal__error", text);
+    error.style.color = "var(--danger)";
+    card.insertBefore(error, actionsRow);
+  };
+
+  /** Fill a section's transform UI from a finished job. */
+  const settleTransformUi = (entry, { results, lossy, failed }) => {
+    const t = entry.transform;
+    t.progress.hidden = true;
+    if (results?.length) {
+      t.sample.hidden = false;
+      t.sample.textContent = "";
+      t.sample.appendChild(el("span", "eyebrow", "Result"));
+      for (const value of results.slice(0, 4)) {
+        t.sample.appendChild(el("div", "transform__row mono", formatSampleRow(value)));
+      }
+      if (results.length > 4) {
+        t.sample.appendChild(el("div", "grid__more", `+ ${(results.length - 4).toLocaleString()} more rows`));
+      }
+    }
+    if (lossy?.length) {
+      const warn = el("div", "proposal__warning");
+      warn.appendChild(el("span", "eyebrow", "Check these rows"));
+      warn.appendChild(el("p", null,
+        `${lossy.length} row${lossy.length === 1 ? "" : "s"} lost some of the original text — the columns chosen ` +
+        `may not cover everything in the source. Undo and ask for more columns if so.`));
+      entry.transform.wrap.appendChild(warn);
+    }
+    if (failed?.length) {
+      const warn = el("div", "proposal__summary",
+        `${failed.length} row${failed.length === 1 ? "" : "s"} could not be transformed and were left unchanged.`);
+      warn.style.color = "var(--amber)";
+      entry.transform.wrap.appendChild(warn);
     }
   };
 
@@ -222,22 +287,28 @@ export function buildProposalGroup(handlers, { deferActions = false } = {}) {
     actionsRow.remove();
     const receipt = el("div", "proposal__receipt");
     receipt.appendChild(el("span", null,
-      queue.length === 1 ? "Change written to the sheet" : `${queue.length} changes written to the sheet`));
+      entries.length === 1 ? "Change written to the sheet" : `${entries.length} changes written to the sheet`));
     if (undos.length) {
       const undoBtn = el("button", "link", "Undo");
       undoBtn.addEventListener("click", async () => {
         undoBtn.disabled = true;
         undoBtn.textContent = "Undoing…";
+        let done = 0;
         try {
-          for (const undo of [...undos].reverse()) await undo();
+          for (const undo of [...undos].reverse()) {
+            await undo();
+            done += 1;
+          }
           receipt.textContent = "";
-          receipt.appendChild(el("span", null, queue.length === 1 ? "Change undone" : "All changes undone"));
+          receipt.appendChild(el("span", null, entries.length === 1 ? "Change undone" : "All changes undone"));
           card.dataset.status = "pending";
           label.textContent = "Undone";
         } catch (err) {
           undoBtn.disabled = false;
           undoBtn.textContent = "Undo";
-          receipt.querySelector("span").textContent = `Could not undo: ${err.message}`;
+          receipt.querySelector("span").textContent = done
+            ? `Undid ${done} of ${undos.length}, then stopped: ${err.message}`
+            : `Could not undo: ${err.message}`;
         }
       });
       receipt.appendChild(undoBtn);
@@ -262,10 +333,50 @@ export function buildProposalGroup(handlers, { deferActions = false } = {}) {
     apply.textContent = "Applying…";
 
     const undos = [];
+    let current = null;
     try {
-      for (const action of queue) {
-        const { undo } = await handlers.onApply(action, {});
-        if (undo) undos.push(undo);
+      for (const entry of entries) {
+        current = entry;
+        const t = entry.transform;
+        if (t) {
+          // A long job reports progress and can be stopped; Dismiss becomes Stop.
+          t.progress.hidden = false;
+          dismiss.disabled = false;
+          dismiss.textContent = "Stop";
+          dismiss.dataset.mode = "stop";
+        }
+
+        const result = await handlers.onApply(entry.action, {
+          onCancelHandle: (fn) => { cancelRunningJob = fn; },
+          onPhase: (phase) => {
+            if (!t) return;
+            t.label.textContent =
+              phase === "reading" ? "Reading the column…" : phase === "writing" ? "Writing results…" : "Starting…";
+          },
+          onProgress: ({ done, total, sample, records }) => {
+            if (!t) return;
+            t.bar.style.width = `${Math.max(2, (done / total) * 100).toFixed(1)}%`;
+            t.label.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} rows`
+              + (records != null ? ` · ${records.toLocaleString()} record${records === 1 ? "" : "s"} found` : "");
+            if (sample?.length) {
+              t.sample.hidden = false;
+              t.sample.textContent = "";
+              t.sample.appendChild(el("span", "eyebrow", "First results"));
+              for (const value of sample.slice(0, 4)) {
+                t.sample.appendChild(el("div", "transform__row mono", formatSampleRow(value)));
+              }
+            }
+          },
+        });
+
+        if (t) {
+          settleTransformUi(entry, result ?? {});
+          dismiss.disabled = true;
+          dismiss.textContent = "Dismiss";
+          delete dismiss.dataset.mode;
+          cancelRunningJob = null;
+        }
+        if (result?.undo) undos.push(result.undo);
       }
       finish(undos);
     } catch (err) {
@@ -274,23 +385,35 @@ export function buildProposalGroup(handlers, { deferActions = false } = {}) {
       for (const undo of undos.reverse()) {
         try { await undo(); } catch { /* keep unwinding */ }
       }
+      if (current?.transform) {
+        current.transform.progress.hidden = true;
+      }
+      cancelRunningJob = null;
       apply.disabled = false;
       dismiss.disabled = false;
+      dismiss.textContent = "Dismiss";
+      delete dismiss.dataset.mode;
       apply.textContent = applyLabel;
-      const error = el("div", "proposal__summary proposal__error",
-        `Could not apply: ${err.message}. The sheet was left unchanged.`);
-      error.style.color = "var(--danger)";
-      card.insertBefore(error, actionsRow);
+      showError(
+        `Could not apply${entries.length > 1 && current ? ` "${current.action.summary}"` : ""}: ${err.message}. ` +
+        `${undos.length || entries.indexOf(current) > 0 ? "Everything that had been applied was rolled back." : "The sheet was left unchanged."}`,
+      );
     }
   });
 
   dismiss.addEventListener("click", () => {
-    for (const action of queue) handlers.onDismiss?.(action);
+    if (dismiss.dataset.mode === "stop") {
+      cancelRunningJob?.();
+      dismiss.disabled = true;
+      dismiss.textContent = "Stopping…";
+      return;
+    }
+    for (const entry of entries) handlers.onDismiss?.(entry.action);
     card.dataset.status = "applied";
     label.textContent = "Dismissed";
     actionsRow.remove();
     const receipt = el("div", "proposal__receipt");
-    receipt.appendChild(el("span", null, queue.length === 1 ? "Change dismissed" : "Changes dismissed"));
+    receipt.appendChild(el("span", null, entries.length === 1 ? "Change dismissed" : "Changes dismissed"));
     card.appendChild(receipt);
   });
 

@@ -489,7 +489,11 @@ export const ACTION_SPECS = {
   },
 
   insert_column: {
-    description: "Insert a new empty column before the given column letter, optionally with a header in row 1.",
+    description:
+      "Insert a new empty column between existing data columns, optionally with a header in row 1. " +
+      "Rarely needed: split_column, transform_column, and extract_table write their own headers at " +
+      "their target, so NEVER insert columns for them — and never insert a column you are about to " +
+      "write into anyway. Every insert shifts the address of every column after it.",
     params: {
       type: "object",
       properties: {

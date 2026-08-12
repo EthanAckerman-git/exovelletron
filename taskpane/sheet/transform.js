@@ -7,6 +7,7 @@
  * host.
  */
 import { streamTransform, streamExtract } from "../api.js";
+import { gridsMatch, UNDO_CHANGED_MESSAGE } from "./apply.js";
 import {
   loadHeaderFormat,
   snapshotHeaderFormat,
@@ -31,6 +32,43 @@ const indexToColumn = (index) => {
   }
   return out;
 };
+
+/**
+ * Read the block (and header) back after writing, so undo can prove the cells still
+ * hold exactly this before restoring — and refuse instead of wiping newer work.
+ */
+async function readBackWritten(action, address) {
+  return Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    const range = sheet.getRange(address);
+    range.load("formulas");
+    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
+    if (header) header.load("formulas");
+    await ctx.sync();
+    return { body: range.formulas, header: header ? header.formulas : null };
+  });
+}
+
+/** The shared verify-then-restore undo for whole-range writes. */
+async function undoWrittenBlock(action, address, written, snapshot) {
+  await Excel.run(async (ctx) => {
+    const sheet = targetSheet(ctx, action.sheet);
+    const range = sheet.getRange(address);
+    range.load("formulas");
+    const header = action.headerAddress ? sheet.getRange(action.headerAddress) : null;
+    if (header) header.load("formulas");
+    await ctx.sync();
+
+    if (!gridsMatch(range.formulas, written.body)) throw new Error(UNDO_CHANGED_MESSAGE);
+    if (header && written.header && !gridsMatch(header.formulas, written.header)) {
+      throw new Error(UNDO_CHANGED_MESSAGE);
+    }
+
+    range.formulas = snapshot.body;
+    if (header && snapshot.header) restoreHeader(header, snapshot.header);
+    await ctx.sync();
+  });
+}
 
 /**
  * One snapshot pass before anything is written: the target block's formulas (for
@@ -71,7 +109,14 @@ export async function runTransform(action, handlers = {}) {
     return flatten(range.values);
   });
 
-  if (!source.length) throw new Error("The source column is empty.");
+  // All-blank is as empty as zero rows — rewriting it would "succeed" by writing
+  // blanks, which reads as data loss. The classic cause: columns were inserted
+  // earlier in the same reply and the real data shifted right of the address.
+  if (!source.length || source.every((v) => v.trim() === "")) {
+    throw new Error(
+      `the source ${action.source} is empty — if columns were just inserted, the data meant here has shifted right`,
+    );
+  }
 
   // Snapshot the target before touching it, so Undo restores whatever was there —
   // including the source itself when the transform rewrites in place.
@@ -111,21 +156,14 @@ export async function runTransform(action, handlers = {}) {
     await ctx.sync();
   });
 
+  const written = await readBackWritten(action, action.address);
+
   return {
     message: action.summary,
     failed,
     lossy: lossy ?? [],
     results,
-    undo: async () => {
-      await Excel.run(async (ctx) => {
-        const sheet = targetSheet(ctx, action.sheet);
-        sheet.getRange(action.address).formulas = snapshot.body;
-        if (action.headerAddress && snapshot.header) {
-          restoreHeader(sheet.getRange(action.headerAddress), snapshot.header);
-        }
-        await ctx.sync();
-      });
-    },
+    undo: () => undoWrittenBlock(action, action.address, written, snapshot),
   };
 }
 
@@ -197,19 +235,12 @@ export async function runExtract(action, handlers = {}) {
   // The block is real now; point reveal, history, and the card at all of it.
   action.address = address;
 
+  const written = await readBackWritten(action, address);
+
   return {
     message: `${records.length} record${records.length === 1 ? "" : "s"} written to ${address}`,
     failed,
     results: records,
-    undo: async () => {
-      await Excel.run(async (ctx) => {
-        const sheet = targetSheet(ctx, action.sheet);
-        sheet.getRange(address).formulas = snapshot.body;
-        if (action.headerAddress && snapshot.header) {
-          restoreHeader(sheet.getRange(action.headerAddress), snapshot.header);
-        }
-        await ctx.sync();
-      });
-    },
+    undo: () => undoWrittenBlock(action, address, written, snapshot),
   };
 }

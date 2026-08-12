@@ -18,6 +18,43 @@ import {
 const targetSheet = (ctx, name) =>
   name ? ctx.workbook.worksheets.getItem(name) : ctx.workbook.worksheets.getActiveWorksheet();
 
+/**
+ * Undo must never destroy work that arrived after the apply. Every content undo
+ * therefore re-reads its range and only restores the snapshot when the cells still
+ * hold exactly what the apply wrote; anything else means a later change — another
+ * card's output, or the user's own typing — now lives there, and the undo refuses.
+ */
+export const UNDO_CHANGED_MESSAGE =
+  "the sheet has changed here since this was applied — undo would overwrite that newer work, so nothing was touched";
+
+/** Deep-compare two formula grids the way Excel hands them back. */
+export const gridsMatch = (a, b) =>
+  Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+  a.every((row, r) => Array.isArray(row) && Array.isArray(b[r]) && row.length === b[r].length &&
+    row.every((cell, c) => String(cell) === String(b[r][c])));
+
+/** Read a range's formulas back after a write, so undo can prove nothing moved. */
+async function readBack(action, address) {
+  return Excel.run(async (ctx) => {
+    const range = targetSheet(ctx, action.sheet).getRange(address);
+    range.load("formulas");
+    await ctx.sync();
+    return range.formulas;
+  });
+}
+
+/** Restore a snapshot only when the range still holds exactly what was written. */
+async function restoreIfUnchanged(action, address, written, snapshot) {
+  await Excel.run(async (ctx) => {
+    const range = targetSheet(ctx, action.sheet).getRange(address);
+    range.load("formulas");
+    await ctx.sync();
+    if (!gridsMatch(range.formulas, written)) throw new Error(UNDO_CHANGED_MESSAGE);
+    range.formulas = snapshot;
+    await ctx.sync();
+  });
+}
+
 const supportsCopyFrom = () => {
   try {
     return Office.context.requirements.isSetSupported("ExcelApi", "1.9");
@@ -100,15 +137,11 @@ async function applyFormulaFill(action) {
     await ctx.sync();
   });
 
+  const written = await readBack(action, action.address);
+
   return {
     message: action.summary,
-    undo: async () => {
-      await Excel.run(async (ctx) => {
-        const range = targetSheet(ctx, action.sheet).getRange(action.address);
-        range.formulas = snapshot;
-        await ctx.sync();
-      });
-    },
+    undo: () => restoreIfUnchanged(action, action.address, written, snapshot),
   };
 }
 
@@ -129,15 +162,11 @@ async function applyWrite(action, mutate) {
     await ctx.sync();
   });
 
+  const written = await readBack(action, action.address);
+
   return {
     message: action.summary,
-    undo: async () => {
-      await Excel.run(async (ctx) => {
-        const range = targetSheet(ctx, action.sheet).getRange(action.address);
-        range.formulas = snapshot;
-        await ctx.sync();
-      });
-    },
+    undo: () => restoreIfUnchanged(action, action.address, written, snapshot),
   };
 }
 
@@ -206,9 +235,33 @@ async function applyInsertColumn(action) {
 
   return {
     message: action.summary,
+    // Deleting a column erases whatever it holds AND shifts every column after it.
+    // That is only a clean revert while the column still contains nothing but what
+    // this action created — the header, or nothing at all. Once anything else has
+    // been written into it (a later card's output, the user's typing), undo refuses.
     undo: async () => {
       await Excel.run(async (ctx) => {
-        targetSheet(ctx, action.sheet).getRange(`${action.before}:${action.before}`).delete(Excel.DeleteShiftDirection.left);
+        const sheet = targetSheet(ctx, action.sheet);
+        const column = sheet.getRange(`${action.before}:${action.before}`);
+        const used = column.getUsedRangeOrNullObject(true);
+        used.load(["isNullObject", "formulas", "rowIndex", "rowCount"]);
+        await ctx.sync();
+
+        if (!used.isNullObject) {
+          const onlyTheHeader =
+            action.header &&
+            used.rowIndex === 0 &&
+            used.rowCount === 1 &&
+            String(used.formulas[0][0]) === String(action.header);
+          const empty = used.formulas.every((row) => row.every((cell) => String(cell) === ""));
+          if (!onlyTheHeader && !empty) {
+            throw new Error(
+              "the new column has been filled since — deleting it now would erase that work, so nothing was touched",
+            );
+          }
+        }
+
+        column.delete(Excel.DeleteShiftDirection.left);
         await ctx.sync();
       });
     },
@@ -235,15 +288,11 @@ async function applySort(action) {
     await ctx.sync();
   });
 
+  const written = await readBack(action, action.address);
+
   return {
     message: action.summary,
-    undo: async () => {
-      await Excel.run(async (ctx) => {
-        const range = targetSheet(ctx, action.sheet).getRange(action.address);
-        range.formulas = snapshot;
-        await ctx.sync();
-      });
-    },
+    undo: () => restoreIfUnchanged(action, action.address, written, snapshot),
   };
 }
 

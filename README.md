@@ -28,7 +28,9 @@ Everything runs on your own Mac. No account, no API key, no internet after setup
 | **Find problems** | Blanks, duplicates, values that look wrong. |
 | **Use the web** *(optional)* | Off by default. Click the globe in the pane and the AI can search DuckDuckGo **and open pages you link it to** — paste a USPS formatting guide and it reads the actual rules. The transcript shows a receipt for every search and every page opened. |
 
-**Nothing is written until you click Apply**, and every change has an **Undo**.
+**Nothing is written until you click Apply** — everything the AI proposes in one reply
+sits on a single card with one Apply — and every change has an **Undo** that refuses to
+run rather than overwrite anything you (or it) added afterwards.
 
 ---
 

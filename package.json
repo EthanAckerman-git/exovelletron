@@ -1,7 +1,7 @@
 {
   "name": "exovelletron",
   "productName": "Exovelletron",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Fully offline AI assistant for Microsoft Excel. Your data never leaves your Mac.",
   "type": "module",
   "main": "desktop/main.js",

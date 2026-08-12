@@ -6,7 +6,7 @@ import { readSheetContext, describeSelection } from "./sheet/context.js";
 import { readRangeForModel, calculateForModel } from "./sheet/reader.js";
 import { applyAction, revealRange } from "./sheet/apply.js";
 import { runTransform, runExtract } from "./sheet/transform.js";
-import { el, buildTurn, buildProposal, buildProposalGroup, armProposals, renderProse } from "./ui/render.js";
+import { el, buildTurn, buildProposalGroup, armProposals, renderProse } from "./ui/render.js";
 import { createHistoryPanel } from "./ui/history.js";
 
 const dom = {};
@@ -532,29 +532,21 @@ async function submit() {
       onAction: (action) => {
         caret.remove();
         setVerb("Proposing a change");
-        // Cards appear while the reply is still streaming, but their buttons stay
+        // The card appears while the reply is still streaming, but its buttons stay
         // disabled until the turn ends — the engine can only do one thing at a time,
         // so an early click would just be refused as busy.
         //
-        // Instant changes from one reply share ONE card and ONE Apply — a header plus
-        // the column under it is a single idea, not two questions. Long-running work
-        // keeps its own card for its progress-and-stop lifecycle.
-        if (BATCHED_ACTIONS.has(action.type) || action.type === EXTRACT_ACTION) {
-          answer.turn.appendChild(buildProposal(
-            action,
+        // EVERY change in one reply — instant writes and long-running jobs alike —
+        // shares ONE card, ONE Apply, and ONE Undo. Splitting a column and cleaning
+        // two others is a single plan, not three questions.
+        if (!proposalGroup) {
+          proposalGroup = buildProposalGroup(
             { onApply: applyProposal, canApply: whyApplyIsBlocked },
             { deferActions: true },
-          ));
-        } else {
-          if (!proposalGroup) {
-            proposalGroup = buildProposalGroup(
-              { onApply: applyProposal, canApply: whyApplyIsBlocked },
-              { deferActions: true },
-            );
-            answer.turn.appendChild(proposalGroup.card);
-          }
-          proposalGroup.add(action);
+          );
+          answer.turn.appendChild(proposalGroup.card);
         }
+        proposalGroup.add(action);
         scrollToEnd();
       },
       onDone: ({ text: finalText, stats, actions }) => {

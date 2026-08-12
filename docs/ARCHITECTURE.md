@@ -148,6 +148,17 @@ never fired at all. Every streaming route now watches `res.on("close")` and trea
 `writableEnded === false` as the real disconnect. Surfaced by the read-bridge
 integration test, which deadlocked without the fix.
 
+**Undo must verify before it restores.** Undo used to write its snapshot back
+unconditionally — and deleting an inserted column unconditionally — which destroyed
+anything that had landed in those cells afterwards: a later card's output, the user's
+own typing. Watching a real session (split one column, clean two others, then revert)
+showed exactly that: the revert wiped both the new work and neighbouring data. Every
+content undo now re-reads its range and compares formulas against what the apply wrote;
+a mismatch refuses with "nothing was touched" instead of overwriting. The column-insert
+undo only deletes a column that still holds nothing but the header it created. And every
+change in one reply shares a single card — one Apply that runs jobs sequentially with
+progress, rollback when one fails part-way, and one Undo that unwinds in reverse.
+
 **Proposal cards must not go live while the reply is still streaming.** Tool calls arrive
 mid-stream and used to render with a clickable Apply, but the engine does one thing at a
 time — an early click always failed with "the model is busy". Cards now appear disarmed
