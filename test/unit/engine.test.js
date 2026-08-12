@@ -33,6 +33,31 @@ async function readyEngine(driver) {
   return engine;
 }
 
+describe("the llama instance", () => {
+  it("is created exactly once even when memoryInfo races the model load", async () => {
+    // Two lazy `if (!this.#llama)` checks used to pass at the same time, creating two
+    // instances — the model belonged to one, grammars were built on the other, and
+    // every transform batch failed with an instance mismatch. Single-flight forever.
+    let creations = 0;
+    const driver = { run: async () => "ok" };
+    const base = fakeLlama(driver);
+    const mod = {
+      ...base,
+      getLlama: async (...args) => {
+        creations += 1;
+        return base.getLlama(...args);
+      },
+    };
+    const engine = new Engine({ importLlama: async () => mod, config: { contextTokens: 8192 } });
+    await Promise.all([
+      engine.memoryInfo(),
+      engine.load("test-model", "/fake/model.gguf"),
+      engine.memoryInfo(),
+    ]);
+    expect(creations).toBe(1);
+  });
+});
+
 describe("the read_range tool", () => {
   it("is absent when no readSheet callback is provided", async () => {
     const driver = {};

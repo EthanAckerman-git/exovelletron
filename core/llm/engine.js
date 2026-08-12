@@ -44,6 +44,7 @@ export const MAX_READS_PER_TURN = 8;
 export class Engine extends EventEmitter {
   #llamaModule;
   #llama = null;
+  #llamaPromise = null;
   #model = null;
   #context = null;
   #session = null;
@@ -77,6 +78,33 @@ export class Engine extends EventEmitter {
   get modelId() { return this.#modelId; }
   get isBusy() { return this.#generation !== null; }
 
+  /**
+   * The one llama.cpp instance, created exactly once no matter who asks first.
+   *
+   * memoryInfo() and load() both need it and can race at startup — the panel asks
+   * for memory while the model is still loading. Two `if (!this.#llama)` checks used
+   * to pass simultaneously, creating TWO instances, and whichever finished last won
+   * the field. The model then belonged to one instance while grammars were built on
+   * the other, and every grammar-constrained call — the whole transform/extract
+   * pipeline — failed with an instance-mismatch error. Single-flighting the creation
+   * closes the race for good.
+   */
+  async #getLlama() {
+    this.#llamaPromise ??= (async () => {
+      const mod = await this.#llamaModule();
+      const llama = await mod.getLlama({
+        logLevel: mod.LlamaLogLevel?.warn ?? undefined,
+        logger: (level, message) => {
+          if (isBenignBackendNoise(message)) return;
+          this.emit("log", { level, message });
+        },
+      });
+      this.#llama = llama;
+      return llama;
+    })();
+    return this.#llamaPromise;
+  }
+
   #setState(state, error = null) {
     this.#state = state;
     this.#error = error;
@@ -100,17 +128,8 @@ export class Engine extends EventEmitter {
    */
   async memoryInfo() {
     try {
-      const mod = await this.#llamaModule();
-      if (!this.#llama) {
-        this.#llama = await mod.getLlama({
-          logLevel: mod.LlamaLogLevel?.warn ?? undefined,
-          logger: (level, message) => {
-            if (isBenignBackendNoise(message)) return;
-            this.emit("log", { level, message });
-          },
-        });
-      }
-      const vram = await this.#llama.getVramState();
+      const llama = await this.#getLlama();
+      const vram = await llama.getVramState();
       // While a model is resident its own weights show as used; the honest figure for
       // "could another model fit" is free plus whatever this one already holds.
       return { total: vram.total, free: vram.free, used: vram.used };
@@ -146,17 +165,8 @@ export class Engine extends EventEmitter {
       await this.#disposeModel();
 
       const mod = await this.#llamaModule();
-      if (!this.#llama) {
-        this.#llama = await mod.getLlama({
-          logLevel: mod.LlamaLogLevel?.warn ?? undefined,
-          logger: (level, message) => {
-            if (isBenignBackendNoise(message)) return;
-            this.emit("log", { level, message });
-          },
-        });
-      }
-
-      this.#model = await this.#llama.loadModel({ modelPath });
+      const llama = await this.#getLlama();
+      this.#model = await llama.loadModel({ modelPath });
 
       // Cap requested context by what the model actually supports.
       const trainCtx = this.#model.trainContextSize ?? this.#config.contextTokens;
@@ -294,18 +304,25 @@ export class Engine extends EventEmitter {
       });
 
       const complete = async (prompt, schema) => {
-        const grammar = await this.#llama.createGrammarForJsonSchema(schema);
-        // Each batch is independent; resetting stops earlier rows steering later ones.
-        await session.resetChatHistory();
-        const raw = await session.prompt(prompt, {
-          grammar,
-          temperature: 0,
-          maxTokens: 3072,
-          signal: controller.signal,
-          stopOnAbortSignal: true,
-          budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
-        });
-        return grammar.parse(raw);
+        try {
+          const grammar = await this.#llama.createGrammarForJsonSchema(schema);
+          // Each batch is independent; resetting stops earlier rows steering later ones.
+          await session.resetChatHistory();
+          const raw = await session.prompt(prompt, {
+            grammar,
+            temperature: 0,
+            maxTokens: 3072,
+            signal: controller.signal,
+            stopOnAbortSignal: true,
+            budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
+          });
+          return grammar.parse(raw);
+        } catch (err) {
+          // The batch runner absorbs failures row by row; without this, a systemic
+          // error (like the llama-instance race was) fails every row in silence.
+          if (err?.code !== "ABORTED") this.emit("log", { level: "error", message: `transform batch: ${err.message}` });
+          throw err;
+        }
       };
 
       const { transformValues, findLossyRows } = await import("./transform.js");
@@ -379,18 +396,23 @@ export class Engine extends EventEmitter {
       });
 
       const complete = async (prompt, schema) => {
-        const grammar = await this.#llama.createGrammarForJsonSchema(schema);
-        // Each chunk stands alone; resetting stops earlier chunks steering later ones.
-        await session.resetChatHistory();
-        const raw = await session.prompt(prompt, {
-          grammar,
-          temperature: 0,
-          maxTokens: 4096,
-          signal: controller.signal,
-          stopOnAbortSignal: true,
-          budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
-        });
-        return grammar.parse(raw);
+        try {
+          const grammar = await this.#llama.createGrammarForJsonSchema(schema);
+          // Each chunk stands alone; resetting stops earlier chunks steering later ones.
+          await session.resetChatHistory();
+          const raw = await session.prompt(prompt, {
+            grammar,
+            temperature: 0,
+            maxTokens: 4096,
+            signal: controller.signal,
+            stopOnAbortSignal: true,
+            budgets: this.#config.thinking ? undefined : { thoughtTokens: 0 },
+          });
+          return grammar.parse(raw);
+        } catch (err) {
+          if (err?.code !== "ABORTED") this.emit("log", { level: "error", message: `extract chunk: ${err.message}` });
+          throw err;
+        }
       };
 
       const { extractRecords } = await import("./extract.js");
